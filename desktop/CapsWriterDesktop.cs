@@ -23,6 +23,12 @@ internal static class Desktop {
     static extern int GetWindowLong(IntPtr h, int index);
     [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint="SetWindowLongW")]
     static extern int SetWindowLong(IntPtr h, int index, int value);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern IntPtr FindWindow(string className, string windowName);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr h, int command);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool SetForegroundWindow(IntPtr h);
 
     static readonly string Dir = AppDomain.CurrentDomain.BaseDirectory;
     static readonly string Exe = Path.Combine(Dir, "start_client.exe");
@@ -47,7 +53,12 @@ internal static class Desktop {
     static void Main() {
         bool first;
         single = new Mutex(true, @"Local\CapsWriterUnifiedDesktop", out first);
-        if (!first) { MessageBox.Show("CapsWriter 已在运行。请从托盘打开主界面。"); return; }
+        if (!first) {
+            var existing=FindWindow(null,"CapsWriter · 语音输入");
+            if(existing!=IntPtr.Zero) { ShowWindow(existing,9); SetForegroundWindow(existing); }
+            else MessageBox.Show("CapsWriter 已在运行。请从托盘打开主界面。");
+            return;
+        }
         try {
             if (!File.Exists(Exe) || !File.Exists(Config))
                 throw new FileNotFoundException("请把 CapsWriterDesktop.exe 放在 start_client.exe 和 config_client.py 旁边。");
