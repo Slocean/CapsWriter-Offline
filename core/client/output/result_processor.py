@@ -291,9 +291,11 @@ class ResultProcessor:
         else:
             handled = False
             if Config.live_output and self._live_session is not None and self._live_session.task_id == message.task_id:
-                handled = self._live_session.update(text)
+                handled = self._live_session.update(text, final=True)
                 if not handled:
                     logger.warning("最终文字未输入：目标窗口焦点已变化，请从日志复制结果")
+                elif self._live_session.revision_skipped:
+                    logger.warning("最终结果修改了较早的文字；已保留输入内容并仅更新末尾，完整结果见日志")
             if not handled and (self._live_session is None or self._live_session.task_id != message.task_id):
                 await self.output.output(text, paste=paste)
             self._live_session = None

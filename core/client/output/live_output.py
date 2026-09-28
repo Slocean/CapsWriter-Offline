@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+from difflib import SequenceMatcher
 from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 
@@ -16,6 +17,31 @@ def edit_delta(previous: str, current: str) -> Tuple[int, str]:
             break
         shared += 1
     return len(previous) - shared, current[shared:]
+
+
+MAX_BACKSPACES = 16
+
+
+def bounded_edit(previous: str, current: str, final: bool = False) -> Tuple[int, str, bool]:
+    """Update at most a short tail; preserve already typed paragraphs.
+
+    Final formatting can insert spaces or punctuation near the beginning.
+    In that case a longest-common-prefix diff would erase the whole utterance.
+    """
+    remove, append = edit_delta(previous, current)
+    if final and len(current) < len(previous) and remove:
+        return 0, "", True
+    if remove <= MAX_BACKSPACES:
+        return remove, append, False
+    blocks = SequenceMatcher(None, previous, current, autojunk=False).get_matching_blocks()
+    for match in reversed(blocks[:-1]):
+        old_tail = len(previous) - match.a - match.size
+        if match.size >= 3 and old_tail <= MAX_BACKSPACES:
+            suffix = current[match.b + match.size:]
+            if old_tail and not suffix:
+                return 0, "", True
+            return old_tail, suffix, True
+    return 0, "", True
 
 
 def foreground_window() -> Optional[int]:
@@ -33,8 +59,9 @@ class LiveOutputSession:
     written: str = ""
     target_window: Optional[int] = None
     blocked: bool = False
+    revision_skipped: bool = False
 
-    def update(self, text: str) -> bool:
+    def update(self, text: str, final: bool = False) -> bool:
         """Write a revision only while the original target remains foreground."""
         if self.blocked:
             return False
@@ -46,13 +73,13 @@ class LiveOutputSession:
         elif active != self.target_window:
             self.blocked = True
             return False
-        remove, append = edit_delta(self.written, text)
-        if remove > 200:
-            self.blocked = True
-            return False
+        remove, append, self.revision_skipped = bounded_edit(self.written, text, final=final)
         for _ in range(remove):
             self.backspace()
         if append:
             self.writer(append)
-        self.written = text
+        if not self.revision_skipped:
+            self.written = text
+        else:
+            self.written = self.written[:-remove] + append if remove else self.written + append
         return True
