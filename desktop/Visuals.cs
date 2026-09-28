@@ -1,18 +1,28 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
 internal static partial class Desktop {
-    sealed class ThemeInk {
+    sealed class ThemeInk : INotifyPropertyChanged {
         public string Light, Dark;
         public SolidColorBrush Brush;
+        public Color CurrentColor {
+            get { return (Color)ColorConverter.ConvertFromString(darkTheme ? Dark : Light); }
+        }
+        public event PropertyChangedEventHandler PropertyChanged;
+        public void Refresh() {
+            var handler=PropertyChanged;
+            if(handler!=null)handler(this,new PropertyChangedEventArgs("CurrentColor"));
+        }
     }
     static readonly Dictionary<string, ThemeInk> inks = new Dictionary<string, ThemeInk>();
     static bool darkTheme;
@@ -34,13 +44,14 @@ internal static partial class Desktop {
         if (!inks.TryGetValue(key, out ink)) {
             ink = new ThemeInk { Light = light, Dark = dark,
                 Brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(darkTheme ? dark : light)) };
+            BindingOperations.SetBinding(ink.Brush,SolidColorBrush.ColorProperty,
+                new Binding("CurrentColor") { Source=ink,Mode=BindingMode.OneWay });
             inks.Add(key, ink);
         }
         return ink.Brush;
     }
     static void ApplyTheme() {
-        foreach (var ink in inks.Values)
-            ink.Brush.Color = (Color)ColorConverter.ConvertFromString(darkTheme ? ink.Dark : ink.Light);
+        foreach (var ink in inks.Values) ink.Refresh();
         if (themeButton != null) themeButton.Content = darkTheme ? "☀  浅色" : "☾  深色";
         ApplyGlass();
     }
