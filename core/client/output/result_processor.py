@@ -16,6 +16,7 @@ from core.client.state import console
 from core.protocol import RecognitionMessage
 
 from core.client.output.text_output import TextOutput
+from core.client.output.live_output import LiveOutputSession
 from core.tools.window_detector import get_active_window_info
 import keyboard
 from . import logger
@@ -70,6 +71,7 @@ class ResultProcessor:
         """
         self.app = app
         self._exit_event = asyncio.Event()
+        self._live_session: Optional[LiveOutputSession] = None
         self._loop = asyncio.get_running_loop()  # 保存事件循环引用
 
     @property
@@ -197,8 +199,18 @@ class ResultProcessor:
                 f"时延: {delay:.2f}s"
             )
 
-        # 如果非最终结果，继续等待
+        # 阶段结果已经是当前任务累计文本，直接修订当前应用里的草稿。
+        # 热词和规则仍在最终结果上运行；最终文本会修订草稿一次。
         if not message.is_final:
+            if Config.live_output and not Config.llm_enabled:
+                logger.info(f"实时识别片段: {text}")
+                if self._live_session is None or self._live_session.task_id != message.task_id:
+                    self._live_session = LiveOutputSession(
+                        message.task_id, keyboard.write,
+                        lambda: keyboard.press_and_release("backspace")
+                    )
+                if not self._live_session.update(text):
+                    logger.warning("实时输入已暂停：目标窗口焦点已变化或修订过长")
             return
 
         # 繁体转换
@@ -277,7 +289,14 @@ class ResultProcessor:
                 matched_hotwords=potential_hotwords  # 传递上下文热词给 LLM
             )
         else:
-            await self.output.output(text, paste=paste)
+            handled = False
+            if Config.live_output and self._live_session is not None and self._live_session.task_id == message.task_id:
+                handled = self._live_session.update(text)
+                if not handled:
+                    logger.warning("最终文字未输入：目标窗口焦点已变化，请从日志复制结果")
+            if not handled and (self._live_session is None or self._live_session.task_id != message.task_id):
+                await self.output.output(text, paste=paste)
+            self._live_session = None
             self.state.set_output_text(text)
             broadcast_output_udp(text)
 
@@ -305,6 +324,7 @@ class ResultProcessor:
                 file_audio
             )
 
+        self._live_session = None
         # 检测修饰键状态（调试用）
         self._log_modifier_key_state()
 

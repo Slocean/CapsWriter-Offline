@@ -188,3 +188,5 @@ release
 *.exe
 
 models/**/*.cfg
+# Local desktop build
+/CapsWriterDesktop.exe

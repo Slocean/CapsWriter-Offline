@@ -66,6 +66,7 @@ class ClientConfig:
     # 日志配置
     log_level = 'DEBUG'          # 日志级别：'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'
 
+    live_output = False       # True: 逐段识别并直接更新当前应用文字
     mic_seg_duration = 60       # 麦克风听写时分段长度：60秒
     mic_seg_overlap = 4         # 麦克风听写时分段重叠：4秒
 
