@@ -13,3 +13,5 @@ The main window has light and dark themes. Its settings and log rows open when c
 During recording, the floating recorder shows a centered stop square with a lightweight animated waveform. The waveform follows recording state rather than microphone volume; it stops when recording ends. Both expanded and compact floating layouts show the same control.
 
 The floating recorder uses a green connection dot and an orange dot plus border while disconnected; recording controls are disabled when the client is unavailable. Its smaller layouts group the expand/collapse and close controls in a compact capsule. Idle connection words are omitted from the floating window.
+
+The compact floating recorder is 164 × 56 logical pixels. It keeps only the connection dot, centered recording button, and grouped window controls; during recording the dot pulses while the expanded recorder retains its waveform.

@@ -196,8 +196,8 @@ internal static partial class Desktop {
         if (floatWindow==null || expandedFloat==null || compactFloat==null) return;
         expandedFloat.Visibility=value?Visibility.Collapsed:Visibility.Visible;
         compactFloat.Visibility=value?Visibility.Visible:Visibility.Collapsed;
-        floatWindow.Width=value?226:320;
-        floatWindow.Height=value?64:108;
+        floatWindow.Width=value?164:320;
+        floatWindow.Height=value?56:108;
         if (floatCollapseButton!=null) floatCollapseButton.Content="−";
         var work=SystemParameters.WorkArea;
         floatWindow.Left=Math.Max(work.Left,Math.Min(floatWindow.Left,work.Right-floatWindow.Width));
@@ -271,6 +271,8 @@ internal static partial class Desktop {
     }
     static void AnimateWave() {
         wavePhase+=0.21;
+        if(compactConnectionDot!=null)
+            compactConnectionDot.Opacity=.55+.45*Math.Abs(Math.Sin(wavePhase*1.5));
         for(int i=0;i<waveBars.Count;i++) {
             double pulse=Math.Abs(Math.Sin(wavePhase+i*0.66));
             double swell=Math.Abs(Math.Sin(wavePhase*0.43-i*0.32));
@@ -282,7 +284,10 @@ internal static partial class Desktop {
         bool active=recording && floatWindow!=null && floatWindow.IsVisible;
         if(active) {
             if(!waveTick.IsEnabled)waveTick.Start();
-        } else if(waveTick.IsEnabled)waveTick.Stop();
+        } else {
+            if(waveTick.IsEnabled)waveTick.Stop();
+            if(compactConnectionDot!=null)compactConnectionDot.Opacity=1;
+        }
         foreach(var bar in waveBars) {
             var row=bar.Tag as StackPanel;
             if(row!=null)row.Opacity=active?1:0;

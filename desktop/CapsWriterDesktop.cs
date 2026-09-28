@@ -332,7 +332,7 @@ internal static partial class Desktop {
     }
 
     static void BuildFloat() {
-        floatWindow=new Window { Width=floatCollapsed?226:320,Height=floatCollapsed?64:108,
+        floatWindow=new Window { Width=floatCollapsed?164:320,Height=floatCollapsed?56:108,
             WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.NoResize,
             AllowsTransparency=true,Background=Brushes.Transparent,
             Topmost=true,ShowInTaskbar=false,ShowActivated=false,
@@ -419,19 +419,13 @@ internal static partial class Desktop {
         compactStatus=Text("",11,"#252628","#F1F1EF",true);
         compactStatus.Margin=new Thickness(6,0,0,0);
         compactLeft.Children.Add(compactStatus);
-        var compactLeftWave=WaveBars(3);
-        compactLeftWave.Margin=new Thickness(5,0,0,0);
-        compactLeft.Children.Add(compactLeftWave);
         compact.Children.Add(compactLeft);
-        compactRecord=RecordButton(44);
+        compactRecord=RecordButton(40);
         compactRecord.Click+=(s,e)=>ToggleRecording();
         Grid.SetColumn(compactRecord,1);compact.Children.Add(compactRecord);
         var compactRight=new StackPanel { Orientation=Orientation.Horizontal,
             HorizontalAlignment=HorizontalAlignment.Right,
             VerticalAlignment=VerticalAlignment.Center };
-        var compactRightWave=WaveBars(3);
-        compactRightWave.Margin=new Thickness(0,0,5,0);
-        compactRight.Children.Add(compactRightWave);
         var expandButton=WindowAction("expand");
         expandButton.ToolTip="展开浮窗";
         expandButton.Click+=(s,e)=>SetFloatCollapsed(false);
