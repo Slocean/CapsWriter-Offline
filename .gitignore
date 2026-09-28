@@ -190,3 +190,4 @@ release
 models/**/*.cfg
 # Local desktop build
 /CapsWriterDesktop.exe
+/desktop_ui.ini

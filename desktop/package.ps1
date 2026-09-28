@@ -20,6 +20,9 @@ New-Item -ItemType Directory -Path $dest -Force | Out-Null
 if ($LASTEXITCODE -gt 7) { throw "robocopy failed with code $LASTEXITCODE" }
 & (Join-Path $PSScriptRoot 'build.ps1')
 Copy-Item -LiteralPath (Join-Path $repo 'CapsWriterDesktop.exe') -Destination $dest -Force
+New-Item -ItemType Directory -Path (Join-Path $dest 'assets') -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repo 'assets\icon.ico') -Destination (Join-Path $dest 'assets\icon.ico') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'assets\icon.png') -Destination (Join-Path $dest 'assets\icon.png') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\output\live_output.py') -Destination (Join-Path $dest 'core\client\output\live_output.py') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\output\result_processor.py') -Destination (Join-Path $dest 'core\client\output\result_processor.py') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $dest 'Desktop-README.md') -Force

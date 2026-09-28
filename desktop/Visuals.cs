@@ -1,0 +1,171 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+
+internal static partial class Desktop {
+    sealed class ThemeInk {
+        public string Light, Dark;
+        public SolidColorBrush Brush;
+    }
+    static readonly Dictionary<string, ThemeInk> inks = new Dictionary<string, ThemeInk>();
+    static bool darkTheme;
+    static bool floatCollapsed;
+    static double glassStrength = 55;
+    static double floatLeft = Double.NaN, floatTop = Double.NaN;
+    static string UiPrefsPath { get { return Path.Combine(Dir, "desktop_ui.ini"); } }
+    static Button themeButton, floatCollapseButton, compactRecord;
+    static TextBlock compactStatus;
+    static TextBlock glassValue;
+    static Border floatOuter;
+    static UIElement expandedFloat, compactFloat;
+    static Slider glassSlider;
+    static bool layoutReady;
+
+    static Brush T(string light, string dark) {
+        string key = light + "|" + dark;
+        ThemeInk ink;
+        if (!inks.TryGetValue(key, out ink)) {
+            ink = new ThemeInk { Light = light, Dark = dark,
+                Brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(darkTheme ? dark : light)) };
+            inks.Add(key, ink);
+        }
+        return ink.Brush;
+    }
+    static void ApplyTheme() {
+        foreach (var ink in inks.Values)
+            ink.Brush.Color = (Color)ColorConverter.ConvertFromString(darkTheme ? ink.Dark : ink.Light);
+        if (themeButton != null) themeButton.Content = darkTheme ? "☀  浅色" : "☾  深色";
+        ApplyGlass();
+    }
+    static TextBlock Text(string value, int size, string light, string dark, bool bold=false) {
+        return new TextBlock { Text=value, FontSize=size, Foreground=T(light,dark),
+            FontWeight=bold ? FontWeights.SemiBold : FontWeights.Normal,
+            VerticalAlignment=VerticalAlignment.Center };
+    }
+    static Button ThemeButton(string title, string lightBg, string darkBg, string lightFg,
+                              string darkFg, double radius=10) {
+        var button=Btn(title,lightBg,lightFg,radius);
+        button.Background=T(lightBg,darkBg);
+        button.Foreground=T(lightFg,darkFg);
+        return button;
+    }
+    static Border Surface(UIElement child, double padding=18) {
+        return new Border { Background=T("#FFFFFF","#1B1C1E"),
+            BorderBrush=T("#E5E5E3","#383A3D"),BorderThickness=new Thickness(1),
+            CornerRadius=new CornerRadius(16),Padding=new Thickness(padding),
+            Margin=new Thickness(0,0,0,11),Child=child };
+    }
+    static UIElement Disclosure(string title, UIElement details) {
+        var stack=new StackPanel();
+        var head=ThemeButton("", "#FFFFFF","#1B1C1E","#191A1B","#F4F4F2",12);
+        head.Height=48;head.HorizontalContentAlignment=HorizontalAlignment.Stretch;
+        head.Padding=new Thickness(0);
+        var row=new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        row.Children.Add(Text(title,13,"#202123","#F0F0EE",true));
+        var arrow=Text("⌄",20,"#777A7D","#A6A8A9");
+        Grid.SetColumn(arrow,1);row.Children.Add(arrow);
+        head.Content=row;
+        details.Visibility=Visibility.Collapsed;
+        head.Click+=(s,e)=>{
+            bool open=details.Visibility!=Visibility.Visible;
+            details.Visibility=open?Visibility.Visible:Visibility.Collapsed;
+            arrow.Text=open?"⌃":"⌄";
+        };
+        stack.Children.Add(head);
+        stack.Children.Add(details);
+        return Surface(stack,17);
+    }
+    static Image AppMark(double size) {
+        var image=new Image { Width=size,Height=size,Stretch=Stretch.Uniform };
+        var path=Path.Combine(Dir,"assets","icon.png");
+        if (File.Exists(path)) {
+            var bitmap=new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption=BitmapCacheOption.OnLoad;
+            bitmap.UriSource=new Uri(path,UriKind.Absolute);
+            bitmap.EndInit(); bitmap.Freeze();
+            image.Source=bitmap;
+        }
+        return image;
+    }
+    static void LoadUiPrefs() {
+        try {
+            if (!File.Exists(UiPrefsPath)) return;
+            foreach (var line in File.ReadAllLines(UiPrefsPath)) {
+                int split=line.IndexOf('=');
+                if (split<1) continue;
+                string key=line.Substring(0,split), value=line.Substring(split+1);
+                double n;
+                if (key=="theme") darkTheme=value=="dark";
+                else if (key=="glass" && Double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out n))
+                    glassStrength=Math.Max(0,Math.Min(100,n));
+                else if (key=="collapsed") floatCollapsed=value=="1";
+                else if (key=="left" && Double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out n))
+                    floatLeft=n;
+                else if (key=="top" && Double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out n))
+                    floatTop=n;
+            }
+        } catch (IOException) {}
+    }
+    static void SaveUiPrefs() {
+        try {
+            string data="theme="+(darkTheme?"dark":"light")+"\n"+
+                "glass="+glassStrength.ToString("F0",CultureInfo.InvariantCulture)+"\n"+
+                "collapsed="+(floatCollapsed?"1":"0")+"\n"+
+                "left="+floatLeft.ToString("F0",CultureInfo.InvariantCulture)+"\n"+
+                "top="+floatTop.ToString("F0",CultureInfo.InvariantCulture)+"\n";
+            File.WriteAllText(UiPrefsPath,data);
+        } catch (IOException) {} catch (UnauthorizedAccessException) {}
+    }
+    static void SetFloatCollapsed(bool value) {
+        floatCollapsed=value;
+        if (floatWindow==null || expandedFloat==null || compactFloat==null) return;
+        expandedFloat.Visibility=value?Visibility.Collapsed:Visibility.Visible;
+        compactFloat.Visibility=value?Visibility.Visible:Visibility.Collapsed;
+        floatWindow.Width=value?258:374;
+        floatWindow.Height=value?70:112;
+        if (floatCollapseButton!=null) floatCollapseButton.Content="−";
+        var work=SystemParameters.WorkArea;
+        floatWindow.Left=Math.Max(work.Left,Math.Min(floatWindow.Left,work.Right-floatWindow.Width));
+        floatWindow.Top=Math.Max(work.Top,Math.Min(floatWindow.Top,work.Bottom-floatWindow.Height));
+        ApplyGlass();
+        SaveUiPrefs();
+    }
+    static void ApplyGlass() {
+        if (floatOuter==null) return;
+        byte alpha=(byte)(75+glassStrength*1.5);
+        var baseColor=darkTheme?Color.FromArgb(alpha,23,24,26):Color.FromArgb(alpha,248,248,246);
+        floatOuter.Background=new SolidColorBrush(baseColor);
+        if (glassValue!=null) glassValue.Text=((int)Math.Round(glassStrength)).ToString()+"%";
+        if (floatWindow==null || new System.Windows.Interop.WindowInteropHelper(floatWindow).Handle==IntPtr.Zero) return;
+        var h=new System.Windows.Interop.WindowInteropHelper(floatWindow).Handle;
+        AccentPolicy accent=new AccentPolicy();
+        accent.AccentState=glassStrength<1?2:4; // transparent or Windows acrylic blur
+        accent.AccentFlags=2;
+        int tint=darkTheme?0x18:0xF8;
+        accent.GradientColor=(alpha<<24)|(tint<<16)|(tint<<8)|tint;
+        int size=Marshal.SizeOf(typeof(AccentPolicy));
+        IntPtr memory=Marshal.AllocHGlobal(size);
+        try {
+            Marshal.StructureToPtr(accent,memory,false);
+            var attribute=new WindowCompositionAttributeData { Attribute=19,Data=memory,SizeOfData=size };
+            try { SetWindowCompositionAttribute(h,ref attribute); }
+            catch (EntryPointNotFoundException) {}
+        } finally { Marshal.FreeHGlobal(memory); }
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct AccentPolicy { public int AccentState, AccentFlags, GradientColor, AnimationId; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct WindowCompositionAttributeData { public int Attribute; public IntPtr Data; public int SizeOfData; }
+    [DllImport("user32.dll")]
+    static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
+}
