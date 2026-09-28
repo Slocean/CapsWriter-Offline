@@ -41,7 +41,7 @@ internal static partial class Desktop {
     static DispatcherTimer tick;
     static TextBox host, port, seconds, contextWords, logBox;
     static TextBlock status, transcript, floatStatus, floatDetail, heroHint, sideStatus;
-    static Ellipse sideDot;
+    static Ellipse sideDot, floatConnectionDot, compactConnectionDot;
     static Button mainRecord, floatRecord;
     static CheckBox showFloat, capsHotkey;
     static bool connected, recording, processing, exiting, ownsBackend;
@@ -332,7 +332,7 @@ internal static partial class Desktop {
     }
 
     static void BuildFloat() {
-        floatWindow=new Window { Width=floatCollapsed?258:374,Height=floatCollapsed?76:142,
+        floatWindow=new Window { Width=floatCollapsed?226:320,Height=floatCollapsed?64:108,
             WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.NoResize,
             AllowsTransparency=true,Background=Brushes.Transparent,
             Topmost=true,ShowInTaskbar=false,ShowActivated=false,
@@ -356,51 +356,53 @@ internal static partial class Desktop {
         };
         floatOuter=new Border { BorderBrush=T("#55FFFFFF","#44FFFFFF"),
             BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(26),
-            Padding=new Thickness(12,9,12,9) };
+            Padding=new Thickness(10,8,10,8) };
         var layers=new Grid();
 
         var expanded=new Grid();
-        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(29) });
+        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(22) });
         expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
-        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(20) });
+        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(16) });
         var top=new Grid();
         top.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         top.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
         var heading=new StackPanel { Orientation=Orientation.Horizontal };
-        heading.Children.Add(AppMark(22));
-        floatStatus=Text("连接中",13,"#202123","#F5F5F3",true);
-        floatStatus.Margin=new Thickness(8,0,0,0);
+        heading.Children.Add(AppMark(19));
+        floatConnectionDot=ConnectionDot();
+        floatConnectionDot.Margin=new Thickness(7,0,0,0);
+        heading.Children.Add(floatConnectionDot);
+        floatStatus=Text("",11,"#5C5E60","#D3D4D2",true);
+        floatStatus.Margin=new Thickness(7,0,0,0);
         heading.Children.Add(floatStatus);top.Children.Add(heading);
-        floatCollapseButton=ThemeButton("−","#00000000","#00000000","#515356","#D5D6D7",8);
-        floatCollapseButton.Width=27;floatCollapseButton.Height=27;
-        floatCollapseButton.FontSize=19;floatCollapseButton.ToolTip="收起浮窗";
+        floatCollapseButton=WindowAction("collapse");
+        floatCollapseButton.ToolTip="收起浮窗";
         floatCollapseButton.Click+=(s,e)=>SetFloatCollapsed(true);
-        Grid.SetColumn(floatCollapseButton,1);top.Children.Add(floatCollapseButton);
-        var close=ThemeButton("×","#00000000","#00000000","#515356","#D5D6D7",8);
-        close.Width=25;close.Height=27;close.FontSize=18;close.ToolTip="隐藏浮窗";
+        var close=WindowAction("close");
+        close.ToolTip="隐藏浮窗";
         close.Click+=(s,e)=>{floatWindow.Hide();showFloat.IsChecked=false;};
-        Grid.SetColumn(close,2);top.Children.Add(close);
+        var topActions=WindowActions(floatCollapseButton,close);
+        Grid.SetColumn(topActions,1);top.Children.Add(topActions);
         expanded.Children.Add(top);
 
         var recorder=new Grid();
         recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
         recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        var leftWave=WaveBars(6);
+        var leftWave=WaveBars(5);
         leftWave.HorizontalAlignment=HorizontalAlignment.Right;
         leftWave.Margin=new Thickness(0,0,13,0);
         recorder.Children.Add(leftWave);
-        floatRecord=RecordButton(60);
+        floatRecord=RecordButton(52);
         floatRecord.Click+=(s,e)=>ToggleRecording();
         Grid.SetColumn(floatRecord,1);recorder.Children.Add(floatRecord);
-        var rightWave=WaveBars(6);
+        var rightWave=WaveBars(5);
         rightWave.HorizontalAlignment=HorizontalAlignment.Left;
         rightWave.Margin=new Thickness(13,0,0,0);
         Grid.SetColumn(rightWave,2);recorder.Children.Add(rightWave);
         Grid.SetRow(recorder,1);expanded.Children.Add(recorder);
         floatDetail=Text("等待客户端连接",11,"#5C5E60","#C5C6C7");
         floatDetail.TextTrimming=TextTrimming.CharacterEllipsis;
+        floatDetail.MaxWidth=292;
         floatDetail.TextAlignment=TextAlignment.Center;
         floatDetail.HorizontalAlignment=HorizontalAlignment.Center;
         Grid.SetRow(floatDetail,2);expanded.Children.Add(floatDetail);
@@ -412,13 +414,16 @@ internal static partial class Desktop {
         compact.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         var compactLeft=new StackPanel { Orientation=Orientation.Horizontal,
             VerticalAlignment=VerticalAlignment.Center };
-        compactStatus=Text("连接中",12,"#252628","#F1F1EF",true);
+        compactConnectionDot=ConnectionDot();
+        compactLeft.Children.Add(compactConnectionDot);
+        compactStatus=Text("",11,"#252628","#F1F1EF",true);
+        compactStatus.Margin=new Thickness(6,0,0,0);
         compactLeft.Children.Add(compactStatus);
         var compactLeftWave=WaveBars(3);
-        compactLeftWave.Margin=new Thickness(7,0,0,0);
+        compactLeftWave.Margin=new Thickness(5,0,0,0);
         compactLeft.Children.Add(compactLeftWave);
         compact.Children.Add(compactLeft);
-        compactRecord=RecordButton(48);
+        compactRecord=RecordButton(44);
         compactRecord.Click+=(s,e)=>ToggleRecording();
         Grid.SetColumn(compactRecord,1);compact.Children.Add(compactRecord);
         var compactRight=new StackPanel { Orientation=Orientation.Horizontal,
@@ -427,16 +432,13 @@ internal static partial class Desktop {
         var compactRightWave=WaveBars(3);
         compactRightWave.Margin=new Thickness(0,0,5,0);
         compactRight.Children.Add(compactRightWave);
-        var expandButton=ThemeButton("↗","#00000000","#00000000","#515356","#D5D6D7",8);
-        expandButton.Width=25;expandButton.Height=28;expandButton.FontSize=15;
+        var expandButton=WindowAction("expand");
         expandButton.ToolTip="展开浮窗";
         expandButton.Click+=(s,e)=>SetFloatCollapsed(false);
-        compactRight.Children.Add(expandButton);
-        var compactClose=ThemeButton("×","#00000000","#00000000","#515356","#D5D6D7",8);
-        compactClose.Width=22;compactClose.Height=28;compactClose.FontSize=17;
+        var compactClose=WindowAction("close");
         compactClose.ToolTip="隐藏浮窗";
         compactClose.Click+=(s,e)=>{floatWindow.Hide();showFloat.IsChecked=false;};
-        compactRight.Children.Add(compactClose);
+        compactRight.Children.Add(WindowActions(expandButton,compactClose));
         Grid.SetColumn(compactRight,2);compact.Children.Add(compactRight);
         compact.Visibility=floatCollapsed?Visibility.Visible:Visibility.Collapsed;
         expanded.Visibility=floatCollapsed?Visibility.Collapsed:Visibility.Visible;
@@ -643,9 +645,16 @@ internal static partial class Desktop {
             "正在连接 "+host.Text+":"+port.Text;
         sideStatus.Text=recording?"正在录音":connected?"服务已连接":"尚未连接";
         sideDot.Fill=B(recording?"#E76C70":connected?"#6DB890":"#A7AAAC");
-        floatStatus.Text=recording?"正在录音  "+(DateTime.Now-started).ToString(@"mm\:ss"):
-            processing?"正在识别":connected?"已连接 · 待机":"正在连接";
-        compactStatus.Text=recording?"录音中":processing?"识别中":connected?"已连接":"连接中";
+        bool floatReady=alive&&connected;
+        var floatIndicator=B(recording?"#EA6867":floatReady?"#63BD89":"#E29A4B");
+        floatConnectionDot.Fill=compactConnectionDot.Fill=floatIndicator;
+        floatConnectionDot.ToolTip=compactConnectionDot.ToolTip=
+            recording?"正在录音":floatReady?"已连接":"未连接服务器";
+        floatOuter.BorderBrush=floatReady?T("#55FFFFFF","#44FFFFFF"):B("#D99043");
+        floatStatus.Text=recording?(DateTime.Now-started).ToString(@"mm\:ss"):
+            processing?"识别中":"";
+        compactStatus.Text=recording?(DateTime.Now-started).ToString(@"mm\:ss"):
+            processing?"识别中":"";
         floatDetail.Text=lastText.Length>0?
             (lastText.Length>28?"…"+lastText.Substring(lastText.Length-28):lastText):
             recording?"边说边输入当前应用":host.Text+":"+port.Text;

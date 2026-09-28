@@ -196,8 +196,8 @@ internal static partial class Desktop {
         if (floatWindow==null || expandedFloat==null || compactFloat==null) return;
         expandedFloat.Visibility=value?Visibility.Collapsed:Visibility.Visible;
         compactFloat.Visibility=value?Visibility.Visible:Visibility.Collapsed;
-        floatWindow.Width=value?258:374;
-        floatWindow.Height=value?76:142;
+        floatWindow.Width=value?226:320;
+        floatWindow.Height=value?64:108;
         if (floatCollapseButton!=null) floatCollapseButton.Content="−";
         var work=SystemParameters.WorkArea;
         floatWindow.Left=Math.Max(work.Left,Math.Min(floatWindow.Left,work.Right-floatWindow.Width));
@@ -205,15 +205,43 @@ internal static partial class Desktop {
         ApplyGlass();
         SaveUiPrefs();
     }
+    static Ellipse ConnectionDot() {
+        return new Ellipse { Width=8,Height=8,Fill=B("#E29A4B"),
+            VerticalAlignment=VerticalAlignment.Center,ToolTip="正在连接服务器" };
+    }
+    static Button WindowAction(string kind) {
+        var button=ThemeButton("","#00000000","#00000000","#575A5D","#D9DAD8",8);
+        button.Width=21;button.Height=20;button.Padding=new Thickness(0);
+        button.Opacity=.76;
+        var path=new System.Windows.Shapes.Path {
+            Data=Geometry.Parse(kind=="close"?
+                "M 3,3 L 11,11 M 11,3 L 3,11":
+                kind=="expand"?"M 3,9 L 7,5 L 11,9":"M 3,5 L 7,9 L 11,5"),
+            Stroke=T("#55585B","#D9DAD8"),StrokeThickness=1.6,
+            StrokeStartLineCap=PenLineCap.Round,StrokeEndLineCap=PenLineCap.Round,
+            Width=14,Height=14,Stretch=Stretch.None };
+        button.Content=path;
+        button.MouseEnter+=(s,e)=>button.Opacity=1;
+        button.MouseLeave+=(s,e)=>button.Opacity=.76;
+        return button;
+    }
+    static Border WindowActions(Button first, Button second) {
+        var row=new StackPanel { Orientation=Orientation.Horizontal };
+        row.Children.Add(first);row.Children.Add(second);
+        return new Border { Background=T("#11000000","#22FFFFFF"),
+            BorderBrush=T("#18000000","#26FFFFFF"),
+            BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(12),
+            Child=row,VerticalAlignment=VerticalAlignment.Center };
+    }
     static Button RecordButton(double size) {
         var button=ThemeButton("", "#202123","#F0F0EE","#FFFFFF","#1C1D1E",size/2);
         button.Width=size;button.Height=size;button.Padding=new Thickness(0);
         button.ToolTip="点击开始录音";
         var glyph=new Grid { Width=28,Height=28 };
-        glyph.Children.Add(new Ellipse { Width=size>=60?18:15,Height=size>=60?18:15,
+        glyph.Children.Add(new Ellipse { Width=size>=50?18:15,Height=size>=50?18:15,
             Fill=T("#FFFFFF","#1C1D1E"),HorizontalAlignment=HorizontalAlignment.Center,
             VerticalAlignment=VerticalAlignment.Center });
-        glyph.Children.Add(new Border { Width=size>=60?25:21,Height=size>=60?25:21,
+        glyph.Children.Add(new Border { Width=size>=50?25:21,Height=size>=50?25:21,
             CornerRadius=new CornerRadius(5),Background=B("#202123"),
             HorizontalAlignment=HorizontalAlignment.Center,
             VerticalAlignment=VerticalAlignment.Center,
