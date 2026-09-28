@@ -41,7 +41,7 @@ internal static partial class Desktop {
     static DispatcherTimer tick;
     static TextBox host, port, seconds, contextWords, logBox;
     static TextBlock status, transcript, floatStatus, floatDetail, heroHint, sideStatus;
-    static Ellipse sideDot, floatConnectionDot, compactConnectionDot;
+    static Ellipse sideDot, floatConnectionDot;
     static Button mainRecord, floatRecord;
     static CheckBox showFloat, capsHotkey;
     static bool connected, recording, processing, exiting, ownsBackend;
@@ -332,7 +332,7 @@ internal static partial class Desktop {
     }
 
     static void BuildFloat() {
-        floatWindow=new Window { Width=floatCollapsed?164:320,Height=floatCollapsed?56:108,
+        floatWindow=new Window { Width=floatCollapsed?116:320,Height=floatCollapsed?56:108,
             WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.NoResize,
             AllowsTransparency=true,Background=Brushes.Transparent,
             Topmost=true,ShowInTaskbar=false,ShowActivated=false,
@@ -356,7 +356,7 @@ internal static partial class Desktop {
         };
         floatOuter=new Border { BorderBrush=T("#55FFFFFF","#44FFFFFF"),
             BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(26),
-            Padding=new Thickness(10,8,10,8) };
+            Padding=new Thickness(10,6,10,6) };
         var layers=new Grid();
 
         var expanded=new Grid();
@@ -408,32 +408,22 @@ internal static partial class Desktop {
         Grid.SetRow(floatDetail,2);expanded.Children.Add(floatDetail);
         layers.Children.Add(expanded);expandedFloat=expanded;
 
-        var compact=new Grid();
-        compact.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        compact.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        compact.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        var compactLeft=new StackPanel { Orientation=Orientation.Horizontal,
+        var compact=new StackPanel { Orientation=Orientation.Horizontal,
+            HorizontalAlignment=HorizontalAlignment.Center,
             VerticalAlignment=VerticalAlignment.Center };
-        compactConnectionDot=ConnectionDot();
-        compactLeft.Children.Add(compactConnectionDot);
-        compactStatus=Text("",11,"#252628","#F1F1EF",true);
-        compactStatus.Margin=new Thickness(6,0,0,0);
-        compactLeft.Children.Add(compactStatus);
-        compact.Children.Add(compactLeft);
         compactRecord=RecordButton(40);
+        ToolTipService.SetShowOnDisabled(compactRecord,true);
         compactRecord.Click+=(s,e)=>ToggleRecording();
-        Grid.SetColumn(compactRecord,1);compact.Children.Add(compactRecord);
-        var compactRight=new StackPanel { Orientation=Orientation.Horizontal,
-            HorizontalAlignment=HorizontalAlignment.Right,
-            VerticalAlignment=VerticalAlignment.Center };
+        compact.Children.Add(compactRecord);
         var expandButton=WindowAction("expand");
         expandButton.ToolTip="展开浮窗";
         expandButton.Click+=(s,e)=>SetFloatCollapsed(false);
         var compactClose=WindowAction("close");
         compactClose.ToolTip="隐藏浮窗";
         compactClose.Click+=(s,e)=>{floatWindow.Hide();showFloat.IsChecked=false;};
-        compactRight.Children.Add(WindowActions(expandButton,compactClose));
-        Grid.SetColumn(compactRight,2);compact.Children.Add(compactRight);
+        var compactActions=WindowActions(expandButton,compactClose);
+        compactActions.Margin=new Thickness(6,0,0,0);
+        compact.Children.Add(compactActions);
         compact.Visibility=floatCollapsed?Visibility.Visible:Visibility.Collapsed;
         expanded.Visibility=floatCollapsed?Visibility.Collapsed:Visibility.Visible;
         layers.Children.Add(compact);compactFloat=compact;
@@ -641,13 +631,11 @@ internal static partial class Desktop {
         sideDot.Fill=B(recording?"#E76C70":connected?"#6DB890":"#A7AAAC");
         bool floatReady=alive&&connected;
         var floatIndicator=B(recording?"#EA6867":floatReady?"#63BD89":"#E29A4B");
-        floatConnectionDot.Fill=compactConnectionDot.Fill=floatIndicator;
-        floatConnectionDot.ToolTip=compactConnectionDot.ToolTip=
-            recording?"正在录音":floatReady?"已连接":"未连接服务器";
+        floatConnectionDot.Fill=floatIndicator;
+        floatConnectionDot.ToolTip=recording?"正在录音":
+            floatReady?"已连接":"未连接服务器";
         floatOuter.BorderBrush=floatReady?T("#55FFFFFF","#44FFFFFF"):B("#D99043");
         floatStatus.Text=recording?(DateTime.Now-started).ToString(@"mm\:ss"):
-            processing?"识别中":"";
-        compactStatus.Text=recording?(DateTime.Now-started).ToString(@"mm\:ss"):
             processing?"识别中":"";
         floatDetail.Text=lastText.Length>0?
             (lastText.Length>28?"…"+lastText.Substring(lastText.Length-28):lastText):
@@ -658,6 +646,9 @@ internal static partial class Desktop {
         mainRecord.Content=recording?"■  结束录音":"●  开始录音";
         SetRecordButtonVisual(floatRecord,recording);
         SetRecordButtonVisual(compactRecord,recording);
+        ((Ellipse)((Grid)compactRecord.Content).Children[0]).Fill=floatIndicator;
+        compactRecord.ToolTip=recording?"点击结束录音":
+            floatReady?"点击开始录音":"未连接服务器";
         UpdateWaveAnimation();
         mainRecord.Background=recording?T("#FCE8E8","#6A3236"):T("#222326","#F0F0EE");
         mainRecord.Foreground=recording?T("#A93D44","#FFFFFF"):T("#FFFFFF","#1C1D1E");

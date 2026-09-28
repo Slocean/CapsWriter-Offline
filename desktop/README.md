@@ -14,4 +14,4 @@ During recording, the floating recorder shows a centered stop square with a ligh
 
 The floating recorder uses a green connection dot and an orange dot plus border while disconnected; recording controls are disabled when the client is unavailable. Its smaller layouts group the expand/collapse and close controls in a compact capsule. Idle connection words are omitted from the floating window.
 
-The compact floating recorder is 164 × 56 logical pixels. It keeps only the connection dot, centered recording button, and grouped window controls; during recording the dot pulses while the expanded recorder retains its waveform.
+The compact floating recorder is 116 × 56 logical pixels. Its recording button contains the connection indicator: green when ready, orange when disconnected; during recording the button pulses and shows a stop square. A smaller vertical inset keeps the circular button fully visible. The grouped expand and close controls sit beside it, with no separate left status area. The expanded recorder retains its waveform.

@@ -32,7 +32,6 @@ internal static partial class Desktop {
     static double floatLeft = Double.NaN, floatTop = Double.NaN;
     static string UiPrefsPath { get { return Path.Combine(Dir, "desktop_ui.ini"); } }
     static Button themeButton, floatCollapseButton, compactRecord;
-    static TextBlock compactStatus;
     static TextBlock glassValue;
     static Border floatOuter;
     static System.Windows.Threading.DispatcherTimer waveTick;
@@ -196,7 +195,7 @@ internal static partial class Desktop {
         if (floatWindow==null || expandedFloat==null || compactFloat==null) return;
         expandedFloat.Visibility=value?Visibility.Collapsed:Visibility.Visible;
         compactFloat.Visibility=value?Visibility.Visible:Visibility.Collapsed;
-        floatWindow.Width=value?164:320;
+        floatWindow.Width=value?116:320;
         floatWindow.Height=value?56:108;
         if (floatCollapseButton!=null) floatCollapseButton.Content="−";
         var work=SystemParameters.WorkArea;
@@ -271,8 +270,8 @@ internal static partial class Desktop {
     }
     static void AnimateWave() {
         wavePhase+=0.21;
-        if(compactConnectionDot!=null)
-            compactConnectionDot.Opacity=.55+.45*Math.Abs(Math.Sin(wavePhase*1.5));
+        if(compactRecord!=null)
+            compactRecord.Opacity=.82+.18*Math.Abs(Math.Sin(wavePhase*1.5));
         for(int i=0;i<waveBars.Count;i++) {
             double pulse=Math.Abs(Math.Sin(wavePhase+i*0.66));
             double swell=Math.Abs(Math.Sin(wavePhase*0.43-i*0.32));
@@ -286,7 +285,7 @@ internal static partial class Desktop {
             if(!waveTick.IsEnabled)waveTick.Start();
         } else {
             if(waveTick.IsEnabled)waveTick.Stop();
-            if(compactConnectionDot!=null)compactConnectionDot.Opacity=1;
+            if(compactRecord!=null)compactRecord.Opacity=1;
         }
         foreach(var bar in waveBars) {
             var row=bar.Tag as StackPanel;
