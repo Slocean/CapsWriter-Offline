@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import TYPE_CHECKING, Optional
 
@@ -187,8 +188,12 @@ class ResultProcessor:
 
 
         # 使用 text 字段（简单拼接结果，用于语音输入）
-        text = message.text
+        text = re.sub(r'(?i)(?:\s*/sil\s*)+$', '', message.text).strip()
         original_text = text  # 保存原始识别结果
+        if message.is_final and not text and getattr(Config, "pause_segmented", False):
+            logger.info("空语音片段未输出文字")
+            self._live_session = None
+            return
         delay = message.time_complete - message.time_submit
 
         if message.is_final:
@@ -227,7 +232,8 @@ class ResultProcessor:
             text = correction_result.text
 
         # 2. 去掉末尾符号
-        text = TextOutput.strip_punc(text)
+        if not (Config.live_output and getattr(Config, "pause_segmented", False)):
+            text = TextOutput.strip_punc(text)
 
         # 3. 正则替换
         text = self.hotword.get_rule_corrector().substitute(text)

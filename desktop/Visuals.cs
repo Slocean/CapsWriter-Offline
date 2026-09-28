@@ -36,6 +36,10 @@ internal static partial class Desktop {
     static Border floatOuter;
     static UIElement expandedFloat, compactFloat;
     static Slider glassSlider;
+    static Button liveModeButton, batchModeButton;
+    static TextBlock modeHint;
+    static FrameworkElement pauseSetting;
+    static bool liveMode=true;
     static bool layoutReady;
 
     static Brush T(string light, string dark) {
@@ -95,6 +99,52 @@ internal static partial class Desktop {
         stack.Children.Add(details);
         return Surface(stack,17);
     }
+    static void UpdateModeButtons() {
+        if (liveModeButton==null || batchModeButton==null) return;
+        liveModeButton.Background=liveMode?T("#222326","#F0F0EE"):T("#F1F2F0","#303235");
+        liveModeButton.Foreground=liveMode?T("#FFFFFF","#1C1D1E"):T("#4A4C4F","#D1D3D3");
+        batchModeButton.Background=liveMode?T("#F1F2F0","#303235"):T("#222326","#F0F0EE");
+        batchModeButton.Foreground=liveMode?T("#4A4C4F","#D1D3D3"):T("#FFFFFF","#1C1D1E");
+        if(modeHint!=null)modeHint.Text=liveMode?
+            "说话停顿后发送这一句；持续录音时继续写入。":
+            "持续录音，松开按键或结束录音后一次回写。";
+        if(pauseSetting!=null)pauseSetting.Visibility=liveMode?Visibility.Visible:Visibility.Collapsed;
+    }
+    static void SelectMode(bool value) {
+        if(liveMode==value)return;
+        if(recording || processing) {
+            MessageBox.Show("请先结束当前录音和识别，再切换输入方式。");
+            return;
+        }
+        bool previous=liveMode;
+        liveMode=value;
+        if(!SaveSettings(true))liveMode=previous;
+        UpdateModeButtons();
+    }
+    static Style SlimScrollBar() {
+        const string xaml=@"<Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+ xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
+ TargetType='{x:Type ScrollBar}'>
+ <Setter Property='Width' Value='10'/>
+ <Setter Property='Background' Value='Transparent'/>
+ <Setter Property='Template'><Setter.Value>
+  <ControlTemplate TargetType='{x:Type ScrollBar}'>
+   <Grid Background='Transparent' Width='10'>
+    <Track x:Name='PART_Track' IsDirectionReversed='True'>
+     <Track.DecreaseRepeatButton><RepeatButton Command='{x:Static ScrollBar.PageUpCommand}' Opacity='0'/></Track.DecreaseRepeatButton>
+     <Track.Thumb><Thumb>
+      <Thumb.Template><ControlTemplate TargetType='{x:Type Thumb}'>
+       <Border Background='#888B8E' CornerRadius='4' Margin='2,1'/>
+      </ControlTemplate></Thumb.Template>
+     </Thumb></Track.Thumb>
+     <Track.IncreaseRepeatButton><RepeatButton Command='{x:Static ScrollBar.PageDownCommand}' Opacity='0'/></Track.IncreaseRepeatButton>
+    </Track>
+   </Grid>
+  </ControlTemplate>
+ </Setter.Value></Setter>
+</Style>";
+        return (Style)System.Windows.Markup.XamlReader.Parse(xaml);
+    }
     static Image AppMark(double size) {
         var image=new Image { Width=size,Height=size,Stretch=Stretch.Uniform };
         var path=Path.Combine(Dir,"assets","icon.png");
@@ -151,6 +201,19 @@ internal static partial class Desktop {
         ApplyGlass();
         SaveUiPrefs();
     }
+    static void ClipFloatCorners() {
+        if(floatWindow==null)return;
+        var hwnd=new System.Windows.Interop.WindowInteropHelper(floatWindow).Handle;
+        if(hwnd==IntPtr.Zero)return;
+        var source=PresentationSource.FromVisual(floatWindow);
+        double sx=source!=null?source.CompositionTarget.TransformToDevice.M11:1;
+        double sy=source!=null?source.CompositionTarget.TransformToDevice.M22:1;
+        int width=(int)Math.Ceiling(floatWindow.Width*sx);
+        int height=(int)Math.Ceiling(floatWindow.Height*sy);
+        IntPtr region=CreateRoundRectRgn(0,0,width+1,height+1,
+            (int)Math.Round(52*sx),(int)Math.Round(52*sy));
+        if(region!=IntPtr.Zero && SetWindowRgn(hwnd,region,true)==0)DeleteObject(region);
+    }
     static void ApplyGlass() {
         if (floatOuter==null) return;
         byte alpha=(byte)(75+glassStrength*1.5);
@@ -159,6 +222,7 @@ internal static partial class Desktop {
         if (glassValue!=null) glassValue.Text=((int)Math.Round(glassStrength)).ToString()+"%";
         if (floatWindow==null || new System.Windows.Interop.WindowInteropHelper(floatWindow).Handle==IntPtr.Zero) return;
         var h=new System.Windows.Interop.WindowInteropHelper(floatWindow).Handle;
+        ClipFloatCorners();
         AccentPolicy accent=new AccentPolicy();
         accent.AccentState=glassStrength<1?2:4; // transparent or Windows acrylic blur
         accent.AccentFlags=2;
@@ -179,4 +243,10 @@ internal static partial class Desktop {
     struct WindowCompositionAttributeData { public int Attribute; public IntPtr Data; public int SizeOfData; }
     [DllImport("user32.dll")]
     static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
+    [DllImport("gdi32.dll")]
+    static extern IntPtr CreateRoundRectRgn(int left,int top,int right,int bottom,int ellipseWidth,int ellipseHeight);
+    [DllImport("user32.dll")]
+    static extern int SetWindowRgn(IntPtr hwnd,IntPtr region,bool redraw);
+    [DllImport("gdi32.dll")]
+    static extern bool DeleteObject(IntPtr obj);
 }

@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -153,7 +154,7 @@ internal static partial class Desktop {
         string iconPath=Path.Combine(Dir,"assets","icon.ico");
         if(File.Exists(iconPath)) main.Icon=System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(iconPath));
         System.Windows.Shell.WindowChrome.SetWindowChrome(main,new System.Windows.Shell.WindowChrome {
-            CaptionHeight=0,ResizeBorderThickness=new Thickness(6),GlassFrameThickness=new Thickness(0),
+            CaptionHeight=64,ResizeBorderThickness=new Thickness(6),GlassFrameThickness=new Thickness(0),
             CornerRadius=new CornerRadius(0),UseAeroCaptionButtons=false });
         main.Closing+=(s,e)=>{if(!exiting){e.Cancel=true;main.Hide();}};
         var root=new Grid { Background=T("#F7F7F5","#121315") };
@@ -171,7 +172,6 @@ internal static partial class Desktop {
         brand.Children.Add(AppMark(32));
         var brandText=Text("CapsWriter",15,"#1C1D1F","#F4F4F2",true);
         brandText.Margin=new Thickness(11,0,0,0);brand.Children.Add(brandText);
-        brand.MouseLeftButtonDown+=(s,e)=>{try{main.DragMove();}catch{}};
         topGrid.Children.Add(brand);
         var badge=new Border { Background=T("#F2F3F1","#2A2C2F"),
             CornerRadius=new CornerRadius(12),Padding=new Thickness(10,5,11,5),
@@ -186,21 +186,27 @@ internal static partial class Desktop {
         themeButton.Width=84;themeButton.Height=32;themeButton.FontSize=11;
         themeButton.Margin=new Thickness(0,0,8,0);
         themeButton.Click+=(s,e)=>{darkTheme=!darkTheme;ApplyTheme();SaveUiPrefs();};
+        System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(themeButton,true);
         Grid.SetColumn(themeButton,2);topGrid.Children.Add(themeButton);
         ApplyTheme();
         var windowButtons=new StackPanel { Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center };
         var minimize=ThemeButton("−","#FFFFFF","#1B1C1E","#55575B","#BFC1C2",8);
         minimize.Width=34;minimize.Height=32;minimize.FontSize=18;
         minimize.Click+=(s,e)=>main.WindowState=WindowState.Minimized;
+        System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(minimize,true);
         windowButtons.Children.Add(minimize);
         var close=ThemeButton("×","#FFFFFF","#1B1C1E","#55575B","#BFC1C2",8);
         close.Width=34;close.Height=32;close.FontSize=18;
-        close.Click+=(s,e)=>main.Hide();windowButtons.Children.Add(close);
+        close.Click+=(s,e)=>main.Hide();
+        System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(close,true);
+        windowButtons.Children.Add(close);
         Grid.SetColumn(windowButtons,3);topGrid.Children.Add(windowButtons);
-        top.Child=topGrid;root.Children.Add(top);
+        top.Child=topGrid;
+        root.Children.Add(top);
 
         var scroll=new ScrollViewer { VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled };
+        scroll.Resources[typeof(ScrollBar)]=SlimScrollBar();
         var body=new StackPanel { Margin=new Thickness(24,20,24,20) };
         body.Children.Add(Text("语音输入",23,"#1B1C1E","#F3F3F1",true));
         var intro=Text("按住 CapsLock，或点击浮窗录音。文字会输入当前应用。",12,"#77797C","#A4A6A8");
@@ -223,8 +229,28 @@ internal static partial class Desktop {
         Grid.SetColumn(mainRecord,1);recorder.Children.Add(mainRecord);
         body.Children.Add(Surface(recorder,20));
 
+        var modePanel=new StackPanel();
+        modePanel.Children.Add(Text("输入方式",13,"#333538","#E6E7E6",true));
+        var modeRow=new StackPanel { Orientation=Orientation.Horizontal,
+            Margin=new Thickness(0,10,0,0) };
+        liveModeButton=ThemeButton("边说边写","#222326","#F0F0EE","#FFFFFF","#1C1D1E",9);
+        liveModeButton.Width=116;liveModeButton.Height=36;
+        liveModeButton.Click+=(s,e)=>SelectMode(true);
+        modeRow.Children.Add(liveModeButton);
+        batchModeButton=ThemeButton("录完再写","#F1F2F0","#303235","#4A4C4F","#D1D3D3",9);
+        batchModeButton.Width=116;batchModeButton.Height=36;
+        batchModeButton.Margin=new Thickness(8,0,0,0);
+        batchModeButton.Click+=(s,e)=>SelectMode(false);
+        modeRow.Children.Add(batchModeButton);
+        modePanel.Children.Add(modeRow);
+        modeHint=Text("",11,"#77797C","#A4A6A8");
+        modeHint.Margin=new Thickness(0,8,0,0);
+        modePanel.Children.Add(modeHint);
+        UpdateModeButtons();
+        body.Children.Add(Surface(modePanel,19));
+
         var result=new StackPanel();
-        result.Children.Add(Text("实时文字",13,"#333538","#E6E7E6",true));
+        result.Children.Add(Text("识别文字",13,"#333538","#E6E7E6",true));
         transcript=Text("等待录音。你说的话会出现在这里。",14,"#787A7D","#B6B8BA");
         transcript.TextWrapping=TextWrapping.Wrap;transcript.MaxHeight=80;
         transcript.Margin=new Thickness(0,10,0,2);result.Children.Add(transcript);
@@ -282,9 +308,9 @@ internal static partial class Desktop {
         var advancedPanel=new StackPanel { Margin=new Thickness(0,4,0,2) };
         var secondsRow=new StackPanel { Orientation=Orientation.Horizontal };
         var secondsCol=new StackPanel { Width=145,Margin=new Thickness(0,0,20,0) };
-        secondsCol.Children.Add(Text("分段秒数",11,"#747679","#A7A9AB"));
+        secondsCol.Children.Add(Text("停顿判定（秒）",11,"#747679","#A7A9AB"));
         seconds=Field();seconds.Margin=new Thickness(0,5,0,0);secondsCol.Children.Add(seconds);
-        secondsRow.Children.Add(secondsCol);
+        pauseSetting=secondsCol;secondsRow.Children.Add(secondsCol);
         capsHotkey=Switch("CapsLock 长按");
         capsHotkey.VerticalAlignment=VerticalAlignment.Bottom;
         capsHotkey.Margin=new Thickness(0,0,0,11);secondsRow.Children.Add(capsHotkey);
@@ -296,8 +322,8 @@ internal static partial class Desktop {
         body.Children.Add(Disclosure("识别与快捷键设置",advancedPanel));
 
         logBox=new TextBox { Height=112,Margin=new Thickness(0,2,0,3),IsReadOnly=true,
-            TextWrapping=TextWrapping.NoWrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,
+            TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,
             Background=T("#F6F6F4","#242527"),Foreground=T("#57595C","#BEC0C1"),
             BorderThickness=new Thickness(0),Padding=new Thickness(9),
             FontFamily=new FontFamily("Consolas"),FontSize=11 };
@@ -329,16 +355,11 @@ internal static partial class Desktop {
         floatWindow.Closing+=(s,e)=>{
             if(!exiting){e.Cancel=true;floatWindow.Hide();showFloat.IsChecked=false;}
         };
-        floatOuter=new Border { BorderBrush=T("#AAFFFFFF","#66FFFFFF"),
+        floatOuter=new Border { BorderBrush=T("#55FFFFFF","#44FFFFFF"),
             BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(26),
             Padding=new Thickness(13,10,10,10),
             Effect=new DropShadowEffect { Color=Colors.Black,Opacity=.24,BlurRadius=22,ShadowDepth=5 } };
         var layers=new Grid();
-        var highlight=new Border { Height=1.5,Background=T("#AFFFFFFF","#75FFFFFF"),
-            VerticalAlignment=VerticalAlignment.Top,Margin=new Thickness(16,0,16,0),
-            CornerRadius=new CornerRadius(1),IsHitTestVisible=false };
-        layers.Children.Add(highlight);
-
         var expanded=new Grid();
         expanded.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(36) });
         expanded.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
@@ -456,11 +477,15 @@ internal static partial class Desktop {
         var content=ReadConfig();
         host.Text=Value(content,"addr","127.0.0.1");
         port.Text=Value(content,"port","6016");
-        seconds.Text=Value(content,"mic_seg_duration","4");
+        seconds.Text=Value(content,"pause_seconds","0.75");
+        liveMode=Value(content,"pause_segmented",
+            Value(content,"live_output","True"))=="True";
+        UpdateModeButtons();
         contextWords.Text=Value(content,"context","");
         double previous;
         if (!Double.TryParse(seconds.Text, System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out previous) || previous>30) seconds.Text="4";
+            System.Globalization.CultureInfo.InvariantCulture, out previous) ||
+            previous<0.3 || previous>2.5) seconds.Text="0.75";
         showFloat.IsChecked=true;
         capsHotkey.IsChecked=!content.Contains("'key': 'caps_lock'") || !Regex.IsMatch(content,@"(?s)'key':\s*'caps_lock'.{0,180}?'enabled':\s*False");
     }
@@ -475,8 +500,8 @@ internal static partial class Desktop {
         if (hostname.Length==0 || hostname.Length>253 || !Regex.IsMatch(hostname,@"^[a-zA-Z0-9.:-]+$") ||
             !UInt16.TryParse(port.Text.Trim(),out pn) || pn==0 ||
             !Double.TryParse(seconds.Text.Trim(),System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture,out duration) || duration<2 || duration>30) {
-            MessageBox.Show("请检查服务器地址、1–65535 端口，以及 2–30 秒的分段时长。"); return false;
+                System.Globalization.CultureInfo.InvariantCulture,out duration) || duration<0.3 || duration>2.5) {
+            MessageBox.Show("请检查服务器地址、1–65535 端口，以及 0.3–2.5 秒的停顿判定。"); return false;
         }
         string prompt=contextWords.Text.Trim();
         if(prompt.Length>120 || prompt.IndexOfAny(new[]{'\r','\n'})>=0) {
@@ -486,10 +511,12 @@ internal static partial class Desktop {
         string updated=content;
         updated=Set(updated,"addr","'"+hostname+"'");
         updated=Set(updated,"port","'"+pn+"'");
-        updated=Set(updated,"mic_seg_duration",duration.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        updated=Set(updated,"mic_seg_overlap","0.5");
+        updated=Set(updated,"mic_seg_duration","60");
+        updated=Set(updated,"mic_seg_overlap",liveMode?"0":"4");
+        updated=Set(updated,"pause_seconds",duration.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        updated=Set(updated,"pause_segmented",liveMode?"True":"False");
         updated=Set(updated,"context","'"+prompt.Replace("\\","\\\\").Replace("'","\\'")+"'");
-        updated=Set(updated,"live_output","True");
+        updated=Set(updated,"live_output",liveMode?"True":"False");
         updated=Set(updated,"enable_tray","False");
         updated=Set(updated,"udp_control","True");
         updated=Set(updated,"udp_control_addr","'127.0.0.1'");
@@ -502,7 +529,7 @@ internal static partial class Desktop {
             File.Copy(Config,Config+".bak",true);
             File.WriteAllText(Config,updated,new UTF8Encoding(false));
         }
-        if(restart) { RestartBackend(); MessageBox.Show("已保存设置并重连。"); }
+        if(restart) { RestartBackend(); status.Text="设置已保存，正在重连"; }
         return true;
     }
 
@@ -563,11 +590,18 @@ internal static partial class Desktop {
         if(line.Contains("WebSocket 建立成功")) connected=true;
         if(line.Contains("WebSocket") && (line.Contains("断开")||line.Contains("关闭")||line.Contains("失败"))) connected=false;
         if(line.Contains("触发：开始录音")) { recording=true; processing=false; started=DateTime.Now; lastText=""; }
-        if(line.Contains("释放：完成录音")) { recording=false; processing=true; }
+        if(line.Contains("释放：完成录音")) { recording=false; processing=!liveMode; }
         int interim=line.IndexOf("实时识别片段:",StringComparison.Ordinal);
         if(interim>=0) lastText=line.Substring(interim+"实时识别片段:".Length).Trim();
         int final=line.IndexOf("收到最终识别结果:",StringComparison.Ordinal);
-        if(final>=0) {lastText=line.Substring(final+9).Trim();processing=false;}
+        if(final>=0) {
+            string piece=line.Substring(final+"收到最终识别结果:".Length).Trim();
+            int timing=piece.IndexOf(", 时延:",StringComparison.Ordinal);
+            if(timing>=0)piece=piece.Substring(0,timing).Trim();
+            piece=Regex.Replace(piece,@"(?:\s*/sil\s*)+$","",RegexOptions.IgnoreCase).Trim();
+            lastText=liveMode?lastText+piece:piece;
+            processing=false;
+        }
         if(line.Contains("实时输入已暂停") || line.Contains("最终文字未输入")) AppendLog(line);
         else if(line.Contains("触发：开始录音")||line.Contains("释放：完成录音")||interim>=0||final>=0||
             line.Contains("WebSocket 建立成功")||line.Contains("ERROR")) AppendLog(line);
@@ -582,7 +616,8 @@ internal static partial class Desktop {
         string state=!alive?"客户端未运行":recording?"正在录音  "+(DateTime.Now-started).ToString(@"mm\:ss"):
             processing?"正在识别":connected?"准备就绪":"正在连接服务器";
         status.Text=state;
-        heroHint.Text=recording?"正在分段识别，文字会进入当前应用":
+        heroHint.Text=recording?
+            (liveMode?"停顿后发送有效语音，继续说会继续输入":"结束录音后一次回写"):
             connected?"连接到 "+host.Text+":"+port.Text+"  ·  按住 CapsLock 或点击浮窗录音":
             "正在连接 "+host.Text+":"+port.Text;
         sideStatus.Text=recording?"正在录音":connected?"服务已连接":"尚未连接";

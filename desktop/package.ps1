@@ -25,6 +25,8 @@ Copy-Item -LiteralPath (Join-Path $repo 'assets\icon.ico') -Destination (Join-Pa
 Copy-Item -LiteralPath (Join-Path $repo 'assets\icon.png') -Destination (Join-Path $dest 'assets\icon.png') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\output\live_output.py') -Destination (Join-Path $dest 'core\client\output\live_output.py') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\output\result_processor.py') -Destination (Join-Path $dest 'core\client\output\result_processor.py') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'core\client\audio\recorder.py') -Destination (Join-Path $dest 'core\client\audio\recorder.py') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'core\client\audio\pause_segmenter.py') -Destination (Join-Path $dest 'core\client\audio\pause_segmenter.py') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $dest 'Desktop-README.md') -Force
 $cfg = Join-Path $dest 'config_client.py'
 $content = [System.IO.File]::ReadAllText($cfg, [System.Text.Encoding]::UTF8)

@@ -67,6 +67,8 @@ class ClientConfig:
     log_level = 'DEBUG'          # 日志级别：'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'
 
     live_output = False       # True: 逐段识别并直接更新当前应用文字
+    pause_segmented = False   # True: 检测到停顿后发送有效语音，避免固定时长切句
+    pause_seconds = 0.75      # 实时听写判定句间停顿的秒数
     mic_seg_duration = 60       # 麦克风听写时分段长度：60秒
     mic_seg_overlap = 4         # 麦克风听写时分段重叠：4秒
 

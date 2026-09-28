@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import time
 import uuid
 from typing import TYPE_CHECKING, Optional
 
@@ -19,6 +20,7 @@ import websockets
 from config_client import ClientConfig as Config
 from core.client.state import console
 from core.client.audio.file_manager import AudioFileManager
+from core.client.audio.pause_segmenter import PauseSegmenter
 from core.client.connection import WebSocketManager
 from core.protocol import AudioMessage
 from . import logger
@@ -94,7 +96,11 @@ class AudioRecorder:
             self._start_time = 0.0
             self._duration = 0.0
             self._cache = []
-            
+
+            if Config.live_output and getattr(Config, "pause_segmented", False):
+                await self._record_pause_segmented()
+                return
+
             # 音频文件管理
             file_path = None
             if Config.save_audio:
@@ -222,6 +228,66 @@ class AudioRecorder:
         except Exception as e:
             logger.error(f"录音任务错误: {e}", exc_info=True)
     
+    async def _send_phrase(self, audio: np.ndarray) -> None:
+        """Send one speech phrase as a final task; the server needs no changes."""
+        if audio is None or len(audio) == 0:
+            return
+        task_id = str(uuid.uuid4())
+        self.task_id = task_id
+        mono = np.mean(audio[::3], axis=1, dtype=np.float32)
+        message = AudioMessage(
+            task_id=task_id,
+            source='mic',
+            data=base64.b64encode(mono.tobytes()).decode('ascii'),
+            is_final=True,
+            time_start=max(self._start_time, time.time() - len(audio) / 48000),
+            seg_duration=60,
+            seg_overlap=0,
+            context=Config.context,
+            language=Config.language,
+        )
+        logger.info(f"停顿后发送语音: {len(audio) / 48000:.2f}s, 任务ID: {task_id}")
+        await self._send_message(message)
+
+    async def _record_pause_segmented(self) -> None:
+        """Keep the mic open, sending voiced phrases only after a pause."""
+        segmenter = PauseSegmenter(pause_seconds=float(getattr(Config, "pause_seconds", 0.75)))
+        file_path = None
+        phrase_count = 0
+        if Config.save_audio:
+            self._file_manager = AudioFileManager()
+        try:
+            while task := await self.state.queue_in.get():
+                self.state.queue_in.task_done()
+                if task['type'] == 'begin':
+                    self._start_time = task['time']
+                elif task['type'] == 'data':
+                    if not self._start_time:
+                        continue
+                    data = task['data']
+                    self._duration += len(data) / 48000
+                    if Config.save_audio and self._file_manager:
+                        if file_path is None:
+                            file_path, _ = self._file_manager.create(data.shape[1], self._start_time)
+                        self._file_manager.write(data)
+                    phrase = segmenter.feed(data)
+                    if phrase is not None:
+                        phrase_count += 1
+                        await self._send_phrase(phrase)
+                elif task['type'] == 'finish':
+                    phrase = segmenter.flush()
+                    if phrase is not None:
+                        phrase_count += 1
+                        await self._send_phrase(phrase)
+                    logger.info(
+                        f"停顿分段录音完成: {self._duration:.2f}s, "
+                        f"有效语音 {phrase_count} 段"
+                    )
+                    break
+        finally:
+            if self._file_manager:
+                self._file_manager.finish()
+
     def get_file_manager(self) -> Optional[AudioFileManager]:
         """获取当前的文件管理器"""
         return self._file_manager
