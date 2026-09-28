@@ -169,8 +169,8 @@ internal static class Desktop {
         return panel;
     }
     static void BuildMain() {
-        main=new Window { Title="CapsWriter · 语音输入", Width=970, Height=720,
-            MinWidth=810, MinHeight=600, WindowStartupLocation=WindowStartupLocation.CenterScreen,
+        main=new Window { Title="CapsWriter · 语音输入", Width=810, Height=700,
+            MinWidth=690, MinHeight=590, WindowStartupLocation=WindowStartupLocation.CenterScreen,
             WindowStyle=WindowStyle.None, ResizeMode=ResizeMode.CanResize,
             Background=B("#F4F7FB"), FontFamily=new FontFamily("Microsoft YaHei UI") };
         System.Windows.Shell.WindowChrome.SetWindowChrome(main,new System.Windows.Shell.WindowChrome {
@@ -178,57 +178,41 @@ internal static class Desktop {
             GlassFrameThickness=new Thickness(0), CornerRadius=new CornerRadius(0),
             UseAeroCaptionButtons=false });
         main.Closing+=(s,e)=>{if(!exiting){e.Cancel=true;main.Hide();}};
-        var shell=new Grid { Background=B("#F4F7FB") };
-        shell.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(202) });
-        shell.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        var root=new Grid { Background=B("#F4F7FB") };
+        root.RowDefinitions.Add(new RowDefinition { Height=new GridLength(64) });
+        root.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
 
-        var side=new Border { Background=B("#10213A") };
-        var sideGrid=new Grid { Margin=new Thickness(22,28,22,22) };
-        sideGrid.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
-        sideGrid.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
-        sideGrid.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
-        var brand=new StackPanel();
-        var brandRow=new StackPanel { Orientation=Orientation.Horizontal };
-        var logo=new Border { Width=42,Height=42,CornerRadius=new CornerRadius(13),
+        var top=new Border { Background=Brushes.White, BorderBrush=B("#E2E8F1"),
+            BorderThickness=new Thickness(0,0,0,1) };
+        var topGrid=new Grid { Margin=new Thickness(22,0,15,0) };
+        topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        var brand=new StackPanel { Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center };
+        var logo=new Border { Width=34,Height=34,CornerRadius=new CornerRadius(10),
             Background=B("#46D7BC"),Margin=new Thickness(0,0,11,0) };
-        logo.Child=new TextBlock { Text="C",FontSize=22,FontWeight=FontWeights.Bold,
+        logo.Child=new TextBlock { Text="C",FontSize=18,FontWeight=FontWeights.Bold,
             Foreground=B("#10213A"),HorizontalAlignment=HorizontalAlignment.Center,
             VerticalAlignment=VerticalAlignment.Center };
-        brandRow.Children.Add(logo);
-        var brandText=new StackPanel { VerticalAlignment=VerticalAlignment.Center };
-        brandText.Children.Add(Label("CAPS",16,"#FFFFFF",true));
-        brandText.Children.Add(Label("WRITER",10,"#85A1C0",true));
-        brandRow.Children.Add(brandText); brand.Children.Add(brandRow);
-        var separator=new Border { Height=1,Background=B("#273B56"),Margin=new Thickness(0,29,0,22) };
-        brand.Children.Add(separator);
-        var nav=new Border { Background=B("#203B5E"),CornerRadius=new CornerRadius(10),Padding=new Thickness(12,10,10,10) };
-        nav.Child=Label("◉   工作台",13,"#EAF5FF",true); brand.Children.Add(nav);
-        Grid.SetRow(brand,0);sideGrid.Children.Add(brand);
-        var sideBottom=new StackPanel();
-        sideBottom.Children.Add(Label("当前连接",11,"#82A0C0"));
-        var conn=new StackPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(0,9,0,4) };
-        sideDot=new Ellipse { Width=8,Height=8,Fill=B("#49D6AF"),Margin=new Thickness(0,0,8,0) };
-        conn.Children.Add(sideDot);
-        sideStatus=Label("连接中",13,"#E4F1FE",true);conn.Children.Add(sideStatus);
-        sideBottom.Children.Add(conn);
-        sideBottom.Children.Add(Label("识别在局域网服务器运行",11,"#7E99B6"));
-        Grid.SetRow(sideBottom,2);sideGrid.Children.Add(sideBottom);
-        side.Child=sideGrid;Grid.SetColumn(side,0);shell.Children.Add(side);
+        brand.Children.Add(logo);
+        var brandName=new StackPanel { VerticalAlignment=VerticalAlignment.Center };
+        brandName.Children.Add(Label("CapsWriter",15,"#1C2E4A",true));
+        brandName.Children.Add(Label("语音输入",10,"#8997AB"));
+        brand.Children.Add(brandName);
+        brand.MouseLeftButtonDown+=(s,e)=>{try{main.DragMove();}catch{}};
+        topGrid.Children.Add(brand);
 
-        var content=new Grid();
-        content.RowDefinitions.Add(new RowDefinition { Height=new GridLength(70) });
-        content.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
-        var top=new Grid { Background=Brushes.White };
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        var topLabels=new StackPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(26,0,0,0),
-            VerticalAlignment=VerticalAlignment.Center };
-        topLabels.Children.Add(Label("语音工作台",16,"#233752",true));
-        topLabels.Children.Add(new Border { Width=1,Height=17,Background=B("#D8E0EB"),Margin=new Thickness(16,0,16,0) });
-        topLabels.Children.Add(Label("说话时直接输入当前应用",12,"#8593A8"));
-        topLabels.MouseLeftButtonDown+=(s,e)=>{try{main.DragMove();}catch{}};
-        top.Children.Add(topLabels);
-        var chromeButtons=new StackPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(0,0,15,0),
+        var connection=new Border { Background=B("#EDF8F4"),CornerRadius=new CornerRadius(12),
+            Padding=new Thickness(10,6,11,6),VerticalAlignment=VerticalAlignment.Center,
+            Margin=new Thickness(0,0,18,0) };
+        var connectionRow=new StackPanel { Orientation=Orientation.Horizontal };
+        sideDot=new Ellipse { Width=8,Height=8,Fill=B("#E9B65D"),
+            Margin=new Thickness(0,0,7,0),VerticalAlignment=VerticalAlignment.Center };
+        connectionRow.Children.Add(sideDot);
+        sideStatus=Label("连接中",11,"#2E826C",true);connectionRow.Children.Add(sideStatus);
+        connection.Child=connectionRow;Grid.SetColumn(connection,1);topGrid.Children.Add(connection);
+
+        var chromeButtons=new StackPanel { Orientation=Orientation.Horizontal,
             VerticalAlignment=VerticalAlignment.Center };
         var minimize=Btn("−","#FFFFFF","#667892",8);
         minimize.Width=36;minimize.Height=34;minimize.FontSize=19;
@@ -238,35 +222,31 @@ internal static class Desktop {
         close.Width=36;close.Height=34;close.FontSize=18;
         close.Click+=(s,e)=>main.Hide();
         chromeButtons.Children.Add(close);
-        Grid.SetColumn(chromeButtons,1);top.Children.Add(chromeButtons);
-        Grid.SetRow(top,0);content.Children.Add(top);
+        Grid.SetColumn(chromeButtons,2);topGrid.Children.Add(chromeButtons);
+        top.Child=topGrid;Grid.SetRow(top,0);root.Children.Add(top);
 
         var scroll=new ScrollViewer { VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled };
-        var body=new StackPanel { Margin=new Thickness(27,25,27,20) };
-        body.Children.Add(Label("让表达自然流动",27,"#1C2E4A",true));
-        var sub=Label("按住 CapsLock，或在浮窗中点击录音。识别文字会进入你正在使用的应用。",12,"#8291A8");
-        sub.Margin=new Thickness(0,6,0,23);body.Children.Add(sub);
+        var body=new StackPanel { Margin=new Thickness(22,20,22,18) };
 
-        var hero=new Border { Height=210,Background=HeroBrush(),CornerRadius=new CornerRadius(20),
-            Margin=new Thickness(0,0,0,16) };
-        var heroGrid=new Grid { Margin=new Thickness(25,23,25,22) };
+        var hero=new Border { Height=164,Background=HeroBrush(),CornerRadius=new CornerRadius(19),
+            Margin=new Thickness(0,0,0,12) };
+        var heroGrid=new Grid { Margin=new Thickness(23,18,23,17) };
         heroGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        heroGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(145) });
+        heroGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(136) });
         var heroLeft=new StackPanel();
-        heroLeft.Children.Add(Label("LIVE DICTATION  /  实时语音输入",10,"#A7D5EE",true));
-        status=Label("准备开始",27,"#FFFFFF",true);status.Margin=new Thickness(0,12,0,0);
+        heroLeft.Children.Add(Label("语音输入  /  LIVE DICTATION",10,"#A7D5EE",true));
+        status=Label("准备开始",24,"#FFFFFF",true);status.Margin=new Thickness(0,7,0,0);
         heroLeft.Children.Add(status);
-        heroHint=Label("正在连接服务器…",12,"#C3DCEF");
-        heroHint.Margin=new Thickness(0,5,0,18);heroLeft.Children.Add(heroHint);
-        mainRecord=Btn("●  开始录音","#FFFFFF","#1D4D82",11);
-        mainRecord.Width=162;mainRecord.Height=46;mainRecord.HorizontalAlignment=HorizontalAlignment.Left;
-        mainRecord.Click+=(s,e)=>{bool start=!recording;if(connected) { ToggleRecording();if(start)main.WindowState=WindowState.Minimized; }};
-        heroLeft.Children.Add(mainRecord);
-        heroGrid.Children.Add(heroLeft);
-        var waveHost=new Border { Background=B("#2A5D8F"),CornerRadius=new CornerRadius(17),
-            Margin=new Thickness(12,17,0,17) };
-        waveHost.Child=Wave(9,"#AEDCF1",out heroBars);
+        heroHint=Label("正在连接服务器…",11,"#C3DCEF");
+        heroHint.Margin=new Thickness(0,3,0,12);heroLeft.Children.Add(heroHint);
+        mainRecord=Btn("●  开始录音","#FFFFFF","#1D4D82",10);
+        mainRecord.Width=144;mainRecord.Height=40;mainRecord.HorizontalAlignment=HorizontalAlignment.Left;
+        mainRecord.Click+=(s,e)=>{bool start=!recording;if(connected){ToggleRecording();if(start)main.WindowState=WindowState.Minimized;}};
+        heroLeft.Children.Add(mainRecord);heroGrid.Children.Add(heroLeft);
+        var waveHost=new Border { Background=B("#2A5D8F"),CornerRadius=new CornerRadius(15),
+            Margin=new Thickness(9,10,0,10) };
+        waveHost.Child=Wave(8,"#AEDCF1",out heroBars);
         Grid.SetColumn(waveHost,1);heroGrid.Children.Add(waveHost);
         hero.Child=heroGrid;body.Children.Add(hero);
 
@@ -274,76 +254,86 @@ internal static class Desktop {
         var resultHead=new Grid();
         resultHead.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         resultHead.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        resultHead.Children.Add(Label("实时文字",15,"#243651",true));
+        resultHead.Children.Add(Label("实时文字",14,"#243651",true));
         var liveTag=new Border { Background=B("#EDF8F4"),CornerRadius=new CornerRadius(10),
-            Padding=new Thickness(9,4,9,4) };
-        liveTag.Child=Label("●  输入到当前应用",11,"#2A9A7B",true);
+            Padding=new Thickness(8,3,8,3) };
+        liveTag.Child=Label("●  输入当前应用",10,"#2A9A7B",true);
         Grid.SetColumn(liveTag,1);resultHead.Children.Add(liveTag);
         resultPanel.Children.Add(resultHead);
-        transcript=Label("等待录音。你说的话会出现在这里。",15,"#77879D");
+        transcript=Label("等待录音。你说的话会出现在这里。",14,"#77879D");
         transcript.TextWrapping=TextWrapping.Wrap;
-        transcript.Margin=new Thickness(0,17,0,6);
-        transcript.MaxHeight=78;
+        transcript.Margin=new Thickness(0,10,0,2);
+        transcript.MaxHeight=58;
         resultPanel.Children.Add(transcript);
-        body.Children.Add(Card(resultPanel,20));
+        body.Children.Add(Card(resultPanel,17));
 
-        var settings=new StackPanel();
-        settings.Children.Add(Label("连接与输入",15,"#243651",true));
-        var hint=Label("服务端负责识别；这台电脑负责录音和输入。",11,"#8291A8");
-        hint.Margin=new Thickness(0,5,0,18);settings.Children.Add(hint);
-        var fields=new Grid();
+        var serverPanel=new StackPanel();
+        var serverHeading=new Grid();
+        serverHeading.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        serverHeading.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        serverHeading.Children.Add(Label("服务器连接",14,"#243651",true));
+        var restart=Btn("重启客户端","#EEF3F9","#49617D",8);
+        restart.Width=100;restart.Height=30;restart.FontSize=11;
+        restart.Click+=(s,e)=>RestartBackend();
+        Grid.SetColumn(restart,1);serverHeading.Children.Add(restart);
+        serverPanel.Children.Add(serverHeading);
+        var fields=new Grid { Margin=new Thickness(0,12,0,0) };
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(2,GridUnitType.Star) });
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        fields.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        fields.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
         var addrCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
-        addrCol.Children.Add(Label("服务器地址",11,"#718098",true)); host=Field();
-        host.Margin=new Thickness(0,7,0,0);addrCol.Children.Add(host);fields.Children.Add(addrCol);
+        addrCol.Children.Add(Label("地址",11,"#718098",true));
+        host=Field();host.Margin=new Thickness(0,6,0,0);addrCol.Children.Add(host);
+        fields.Children.Add(addrCol);
         var portCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
-        portCol.Children.Add(Label("端口",11,"#718098",true));port=Field();
-        port.Margin=new Thickness(0,7,0,0);portCol.Children.Add(port);
+        portCol.Children.Add(Label("端口",11,"#718098",true));
+        port=Field();port.Margin=new Thickness(0,6,0,0);portCol.Children.Add(port);
         Grid.SetColumn(portCol,1);fields.Children.Add(portCol);
-        var segCol=new StackPanel();
-        segCol.Children.Add(Label("分段秒数",11,"#718098",true));seconds=Field();
-        seconds.Margin=new Thickness(0,7,0,0);segCol.Children.Add(seconds);
-        Grid.SetColumn(segCol,2);fields.Children.Add(segCol);
-        settings.Children.Add(fields);
-        var contextPanel=new StackPanel { Margin=new Thickness(0,16,0,0) };
-        contextPanel.Children.Add(Label("识别提示词 · 可选",11,"#718098",true));
-        contextWords=Field();contextWords.Margin=new Thickness(0,7,0,0);
-        contextPanel.Children.Add(contextWords);
-        var contextHint=Label("例如：浮窗、托盘。用于提示模型理解常用词，不能保证纠错。",11,"#91A0B3");
-        contextHint.Margin=new Thickness(0,6,0,0);contextPanel.Children.Add(contextHint);
-        settings.Children.Add(contextPanel);
-        var options=new StackPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(0,18,0,17) };
-        showFloat=Switch("显示浮窗");showFloat.Margin=new Thickness(0,0,26,0);
+        var save=Btn("保存并重连");save.Width=116;save.Height=42;
+        save.VerticalAlignment=VerticalAlignment.Bottom;
+        save.Click+=(s,e)=>SaveSettings(true);
+        Grid.SetColumn(save,2);fields.Children.Add(save);
+        serverPanel.Children.Add(fields);
+        showFloat=Switch("显示浮窗");showFloat.Margin=new Thickness(0,15,0,0);
         showFloat.Checked+=(s,e)=>{if(floatWindow!=null)floatWindow.Show();};
         showFloat.Unchecked+=(s,e)=>{if(floatWindow!=null)floatWindow.Hide();};
-        options.Children.Add(showFloat);
-        capsHotkey=Switch("CapsLock 长按");options.Children.Add(capsHotkey);
-        settings.Children.Add(options);
-        var actions=new StackPanel { Orientation=Orientation.Horizontal };
-        var save=Btn("保存并重连");save.Width=126;save.Click+=(s,e)=>SaveSettings(true);
-        actions.Children.Add(save);
-        var restart=Btn("重启客户端","#ECF1F8","#3A5272");
-        restart.Margin=new Thickness(10,0,0,0);restart.Width=118;
-        restart.Click+=(s,e)=>RestartBackend();
-        actions.Children.Add(restart);
-        settings.Children.Add(actions);
-        body.Children.Add(Card(settings,20));
+        serverPanel.Children.Add(showFloat);
+        body.Children.Add(Card(serverPanel,17));
 
-        var logPanel=new StackPanel();
-        logPanel.Children.Add(Label("运行记录",15,"#243651",true));
-        logPanel.Children.Add(Label("连接、录音和识别事件",11,"#8997AA"));
-        logBox=new TextBox { Height=124,Margin=new Thickness(0,14,0,0),IsReadOnly=true,
+        var advancedPanel=new StackPanel();
+        var secondsRow=new StackPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(0,12,0,0) };
+        var secondsCol=new StackPanel { Width=140,Margin=new Thickness(0,0,14,0) };
+        secondsCol.Children.Add(Label("分段秒数",11,"#718098",true));
+        seconds=Field();seconds.Margin=new Thickness(0,6,0,0);secondsCol.Children.Add(seconds);
+        secondsRow.Children.Add(secondsCol);
+        var shortcutCol=new StackPanel { VerticalAlignment=VerticalAlignment.Bottom,
+            Margin=new Thickness(0,0,0,11) };
+        capsHotkey=Switch("CapsLock 长按");shortcutCol.Children.Add(capsHotkey);
+        secondsRow.Children.Add(shortcutCol);
+        advancedPanel.Children.Add(secondsRow);
+        var contextCol=new StackPanel { Margin=new Thickness(0,13,0,0) };
+        contextCol.Children.Add(Label("识别提示词 · 可选",11,"#718098",true));
+        contextWords=Field();contextWords.Margin=new Thickness(0,6,0,0);
+        contextCol.Children.Add(contextWords);
+        var contextHint=Label("如：浮窗、托盘。提示模型理解常用词，不能保证纠错。",11,"#91A0B3");
+        contextHint.Margin=new Thickness(0,5,0,0);contextCol.Children.Add(contextHint);
+        advancedPanel.Children.Add(contextCol);
+        var advanced=new Expander { Header=Label("识别与快捷键设置",13,"#40536D",true),
+            Content=advancedPanel,IsExpanded=false };
+        body.Children.Add(Card(advanced,14));
+
+        var logBoxPanel=new StackPanel();
+        logBox=new TextBox { Height=105,Margin=new Thickness(0,10,0,0),IsReadOnly=true,
             TextWrapping=TextWrapping.NoWrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,Background=B("#F6F8FC"),
-            Foreground=B("#60718B"),BorderThickness=new Thickness(0),Padding=new Thickness(12),
+            Foreground=B("#60718B"),BorderThickness=new Thickness(0),Padding=new Thickness(10),
             FontFamily=new FontFamily("Consolas"),FontSize=11 };
-        logPanel.Children.Add(logBox);
-        body.Children.Add(Card(logPanel,20));
-        scroll.Content=body;Grid.SetRow(scroll,1);content.Children.Add(scroll);
-        Grid.SetColumn(content,1);shell.Children.Add(content);
-        main.Content=shell;
+        logBoxPanel.Children.Add(logBox);
+        var logExpander=new Expander { Header=Label("运行记录",13,"#40536D",true),
+            Content=logBoxPanel,IsExpanded=false };
+        body.Children.Add(Card(logExpander,14));
+        scroll.Content=body;Grid.SetRow(scroll,1);root.Children.Add(scroll);
+        main.Content=root;
     }
 
     static void BuildFloat() {
