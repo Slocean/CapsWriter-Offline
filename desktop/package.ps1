@@ -27,6 +27,10 @@ Copy-Item -LiteralPath (Join-Path $repo 'core\client\output\live_output.py') -De
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\output\result_processor.py') -Destination (Join-Path $dest 'core\client\output\result_processor.py') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\audio\recorder.py') -Destination (Join-Path $dest 'core\client\audio\recorder.py') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\audio\pause_segmenter.py') -Destination (Join-Path $dest 'core\client\audio\pause_segmenter.py') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'core\client\shortcut\shortcut_manager.py') -Destination (Join-Path $dest 'core\client\shortcut\shortcut_manager.py') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'core\client\shortcut\event_handler.py') -Destination (Join-Path $dest 'core\client\shortcut\event_handler.py') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'core\client\shortcut\key_mapper.py') -Destination (Join-Path $dest 'core\client\shortcut\key_mapper.py') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'core\client\udp\udp_control.py') -Destination (Join-Path $dest 'core\client\udp\udp_control.py') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $dest 'Desktop-README.md') -Force
 $cfg = Join-Path $dest 'config_client.py'
 $content = [System.IO.File]::ReadAllText($cfg, [System.Text.Encoding]::UTF8)

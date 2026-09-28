@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Dict, List, Optional
 
@@ -64,6 +65,13 @@ class ShortcutManager:
         # 按键恢复状态追踪
         self._restoring_keys = set()
 
+        # Keep physical-key state so chords and standalone Ctrl/Alt/Shift work.
+        self._hotkey_lock = threading.RLock()
+        self._pressed_keys = set()
+        self._modifier_used = set()
+        self._active_keyboard = {}
+        self._hotkeys_paused_until = 0.0
+
         # 事件处理器
         self._event_handler = ShortcutEventHandler(self.tasks, self._pool, self._emulator)
 
@@ -89,39 +97,108 @@ class ShortcutManager:
             task.threshold = shortcut.get_threshold(Config.threshold)
             self.tasks[shortcut.key] = task
 
+        # The GUI's UDP button must work even if every keyboard shortcut is off.
+        from core.client.shortcut.shortcut_config import Shortcut
+        self.control_task = ShortcutTask(self.app, Shortcut(key='desktop_control', enabled=False))
+        self.control_task._manager_ref = lambda: self
+        self.control_task.pool = self._pool
+
+    _MODIFIERS = {'ctrl', 'alt', 'shift'}
+
+    def hotkeys_paused(self) -> bool:
+        return time.monotonic() < self._hotkeys_paused_until
+
+    def pause_hotkeys(self, seconds: float = 35.0) -> None:
+        with self._hotkey_lock:
+            self._hotkeys_paused_until = time.monotonic() + seconds
+            self._pressed_keys.clear()
+            self._modifier_used.clear()
+            self._active_keyboard.clear()
+
+    def resume_hotkeys(self) -> None:
+        with self._hotkey_lock:
+            self._hotkeys_paused_until = 0.0
+            self._pressed_keys.clear()
+            self._modifier_used.clear()
+            self._active_keyboard.clear()
+
+    def _match_keyboard_task(self, key_name: str):
+        held_modifiers = self._pressed_keys & self._MODIFIERS
+        for task in self.tasks.values():
+            if task.shortcut.type != 'keyboard':
+                continue
+            parts = task.shortcut.key.split('+')
+            if parts[-1] == key_name and set(parts[:-1]) == held_modifiers - {key_name}:
+                return task
+        return None
+
+    def _launch_modifier_hold(self, key_name: str, task) -> None:
+        time.sleep(task.threshold)
+        with self._hotkey_lock:
+            if (not self.hotkeys_paused() and key_name in self._pressed_keys
+                    and key_name not in self._modifier_used
+                    and self._active_keyboard.get(key_name) is task
+                    and not self.state.recording):
+                task.launch()
+
     # ========== 监听器创建 ==========
 
     def create_keyboard_filter(self):
-        """创建键盘事件过滤器"""
+        """Create one low-level listener for single keys and modifier chords."""
         def win32_event_filter(msg, data):
-            # 只处理 KEYDOWN 和 KEYUP 消息
-            if msg not in KEYBOARD_MESSAGES:
+            if msg not in KEYBOARD_MESSAGES or self.hotkeys_paused():
                 return True
-
             key_name = KeyMapper.vk_to_name(data.vkCode)
-
-            # 防自捕获检查
-            if self._check_emulating(key_name, msg):
-                return True
-            if self._check_restoring(key_name, msg):
+            if self._check_emulating(key_name, msg) or self._check_restoring(key_name, msg):
                 return True
 
-            # 查找匹配的快捷键
-            if key_name not in self.tasks:
-                return True
+            task = None
+            with self._hotkey_lock:
+                if msg in KEY_DOWN_MESSAGES:
+                    if key_name not in self._pressed_keys:
+                        held = self._pressed_keys & self._MODIFIERS
+                        if held:
+                            self._modifier_used.update(held)
+                            if key_name in self._MODIFIERS:
+                                self._modifier_used.add(key_name)
+                        self._pressed_keys.add(key_name)
 
-            task = self.tasks[key_name]
+                    task = self._active_keyboard.get(key_name)
+                    if task is None:
+                        task = self._match_keyboard_task(key_name)
+                        if task is not None:
+                            self._active_keyboard[key_name] = task
+                            if key_name in self._MODIFIERS and task.shortcut.key == key_name:
+                                if task.shortcut.hold_mode:
+                                    self._pool.submit(self._launch_modifier_hold, key_name, task)
+                            else:
+                                self._event_handler.handle_keydown(key_name, task)
 
-            # 处理按键事件
-            if msg in KEY_DOWN_MESSAGES:
-                self._event_handler.handle_keydown(key_name, task)
-            elif msg in KEY_UP_MESSAGES:
-                self._event_handler.handle_keyup(key_name, task)
+                elif msg in KEY_UP_MESSAGES:
+                    task = self._active_keyboard.pop(key_name, None)
+                    if task is not None:
+                        if key_name in self._MODIFIERS and task.shortcut.key == key_name:
+                            if task.shortcut.hold_mode:
+                                if task.is_recording:
+                                    task.finish()
+                            elif key_name not in self._modifier_used:
+                                if task.is_recording:
+                                    task.finish()
+                                elif not self.state.recording:
+                                    task.launch()
+                        else:
+                            self._event_handler.handle_keyup(key_name, task)
 
-            # 阻塞事件
-            if task.shortcut.suppress and self.keyboard_listener:
+                    # Releasing a chord's modifier also ends a held recording.
+                    for trigger, active in list(self._active_keyboard.items()):
+                        if (key_name in active.shortcut.key.split('+')[:-1]
+                                and active.shortcut.hold_mode and active.is_recording):
+                            self._event_handler.handle_keyup(trigger, active)
+                    self._pressed_keys.discard(key_name)
+                    self._modifier_used.discard(key_name)
+
+            if task is not None and task.shortcut.suppress and self.keyboard_listener:
                 self.keyboard_listener.suppress_event()
-
             return True
 
         return win32_event_filter
@@ -130,7 +207,7 @@ class ShortcutManager:
         """创建鼠标事件过滤器"""
         def win32_event_filter(msg, data):
             # 只处理 XBUTTON 消息
-            if msg not in MOUSE_MESSAGES:
+            if self.hotkeys_paused() or msg not in MOUSE_MESSAGES:
                 return True
 
             # 获取按键标识
@@ -165,10 +242,7 @@ class ShortcutManager:
         """处理鼠标按键释放事件"""
         # 单击模式
         if not task.shortcut.hold_mode:
-            if task.pressed:
-                task.pressed = False
-                task.released = True
-                task.event.set()
+            self._event_handler.handle_keyup(button_name, task)
             return
 
         # 长按模式
@@ -283,6 +357,7 @@ class ShortcutManager:
 
     def stop(self) -> None:
         """停止所有监听器和清理资源"""
+        self.pause_hotkeys()
         if self.keyboard_listener:
             try:
                 self.keyboard_listener.stop()
@@ -302,7 +377,7 @@ class ShortcutManager:
                 self.mouse_listener = None
 
         # 取消所有任务
-        for task in self.tasks.values():
+        for task in list(self.tasks.values()) + [self.control_task]:
             if task.is_recording:
                 task.cancel()
 

@@ -87,9 +87,24 @@ class KeyMapper:
         Returns:
             str: 按键名称（与 Shortcut.key 格式一致）
         """
+        # Merge left/right and generic Windows virtual-key codes for modifiers.
+        modifiers = {
+            0x10: 'shift', 0xA0: 'shift', 0xA1: 'shift',
+            0x11: 'ctrl', 0xA2: 'ctrl', 0xA3: 'ctrl',
+            0x12: 'alt', 0xA4: 'alt', 0xA5: 'alt',
+        }
+        if vk in modifiers:
+            return modifiers[vk]
+
         # 首先检查是否是特殊键（pynput Key 枚举）
         if vk in _SPECIAL_KEYS:
             return _SPECIAL_KEYS[vk].name
+
+        # Letters and digits must match configured chords regardless of Shift or IME.
+        if 0x41 <= vk <= 0x5A:
+            return chr(vk).lower()
+        if 0x30 <= vk <= 0x39:
+            return chr(vk)
 
         # 检查是否是小键盘按键
         if vk in NUMPAD_KEYS:

@@ -24,6 +24,13 @@ class ClientConfig:
             'enabled': True         # 启用此快捷键
         },
         {
+            'key': 'ctrl+alt+space',  # 单击开始，再次单击结束
+            'type': 'keyboard',
+            'suppress': True,
+            'hold_mode': False,
+            'enabled': True
+        },
+        {
             'key': 'x2',
             'type': 'mouse',
             'suppress': True,

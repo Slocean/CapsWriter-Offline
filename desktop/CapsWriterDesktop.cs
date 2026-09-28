@@ -43,7 +43,7 @@ internal static partial class Desktop {
     static TextBlock status, transcript, floatStatus, floatDetail, heroHint, sideStatus;
     static Ellipse sideDot, floatConnectionDot;
     static Button mainRecord, floatRecord;
-    static CheckBox showFloat, capsHotkey;
+    static CheckBox showFloat;
     static bool connected, recording, processing, exiting, ownsBackend;
     static string lastText = "";
     static DateTime started;
@@ -305,19 +305,19 @@ internal static partial class Desktop {
         body.Children.Add(Surface(appearance,19));
 
         var advancedPanel=new StackPanel { Margin=new Thickness(0,4,0,2) };
-        var secondsRow=new StackPanel { Orientation=Orientation.Horizontal };
-        var secondsCol=new StackPanel { Width=145,Margin=new Thickness(0,0,20,0) };
+        var secondsCol=new StackPanel { Width=145 };
         secondsCol.Children.Add(Text("停顿判定（秒）",11,"#747679","#A7A9AB"));
         seconds=Field();seconds.Margin=new Thickness(0,5,0,0);secondsCol.Children.Add(seconds);
-        pauseSetting=secondsCol;secondsRow.Children.Add(secondsCol);
-        capsHotkey=Switch("CapsLock 长按");
-        capsHotkey.VerticalAlignment=VerticalAlignment.Bottom;
-        capsHotkey.Margin=new Thickness(0,0,0,11);secondsRow.Children.Add(capsHotkey);
-        advancedPanel.Children.Add(secondsRow);
+        pauseSetting=secondsCol;advancedPanel.Children.Add(secondsCol);
+        advancedPanel.Children.Add(ShortcutSettingsPanel());
         var contextCol=new StackPanel { Margin=new Thickness(0,12,0,0) };
         contextCol.Children.Add(Text("识别提示词（可选）",11,"#747679","#A7A9AB"));
         contextWords=Field();contextWords.Margin=new Thickness(0,5,0,0);
-        contextCol.Children.Add(contextWords);advancedPanel.Children.Add(contextCol);
+        contextWords.ToolTip="例如人名、产品名和专业术语。它会提示识别模型，但不会强制替换结果。";
+        contextCol.Children.Add(contextWords);
+        var contextHelp=Text("给模型提供易听错的词语线索，不会强制改写识别结果。",11,"#85878A","#A7A9AB");
+        contextHelp.Margin=new Thickness(0,6,0,0);contextCol.Children.Add(contextHelp);
+        advancedPanel.Children.Add(contextCol);
         body.Children.Add(Disclosure("识别与快捷键设置",advancedPanel));
 
         logBox=new TextBox { Height=112,Margin=new Thickness(0,2,0,3),IsReadOnly=true,
@@ -494,7 +494,7 @@ internal static partial class Desktop {
             System.Globalization.CultureInfo.InvariantCulture, out previous) ||
             previous<0.3 || previous>2.5) seconds.Text="0.75";
         showFloat.IsChecked=true;
-        capsHotkey.IsChecked=!content.Contains("'key': 'caps_lock'") || !Regex.IsMatch(content,@"(?s)'key':\s*'caps_lock'.{0,180}?'enabled':\s*False");
+        LoadShortcutSettings(content);
     }
     static string Set(string source,string key,string value) {
         string pattern=@"(?m)^(\s*"+Regex.Escape(key)+@"\s*=\s*).*$";
@@ -502,6 +502,8 @@ internal static partial class Desktop {
         return source.Replace("class ClientConfig:", "class ClientConfig:\r\n    "+key+" = "+value);
     }
     static bool SaveSettings(bool restart) {
+        EndShortcutCapture();
+        if(!ValidateShortcutSettings())return false;
         string hostname=host.Text.Trim();
         ushort pn; double duration;
         if (hostname.Length==0 || hostname.Length>253 || !Regex.IsMatch(hostname,@"^[a-zA-Z0-9.:-]+$") ||
@@ -528,10 +530,7 @@ internal static partial class Desktop {
         updated=Set(updated,"udp_control","True");
         updated=Set(updated,"udp_control_addr","'127.0.0.1'");
         updated=Set(updated,"llm_enabled","False");
-        if(capsHotkey.IsChecked==false)
-            updated=Regex.Replace(updated,@"(?s)('key':\s*'caps_lock'.{0,180}?'enabled':\s*)True","$1False");
-        else
-            updated=Regex.Replace(updated,@"(?s)('key':\s*'caps_lock'.{0,180}?'enabled':\s*)False","$1True");
+        updated=ReplaceShortcutBlock(updated);
         if (updated!=content) {
             File.Copy(Config,Config+".bak",true);
             File.WriteAllText(Config,updated,new UTF8Encoding(false));
@@ -625,7 +624,7 @@ internal static partial class Desktop {
         status.Text=state;
         heroHint.Text=recording?
             (liveMode?"停顿后发送有效语音，继续说会继续输入":"结束录音后一次回写"):
-            connected?"连接到 "+host.Text+":"+port.Text+"  ·  按住 CapsLock 或点击浮窗录音":
+            connected?"连接到 "+host.Text+":"+port.Text+"  ·  "+ShortcutHint():
             "正在连接 "+host.Text+":"+port.Text;
         sideStatus.Text=recording?"正在录音":connected?"服务已连接":"尚未连接";
         sideDot.Fill=B(recording?"#E76C70":connected?"#6DB890":"#A7AAAC");

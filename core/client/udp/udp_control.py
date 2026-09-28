@@ -108,22 +108,27 @@ class UDPController:
         if command == 'START':
             if not state.recording:
                 logger.info(f"UDP 控制：开始录音 (来自 {addr[0]}:{addr[1]})")
-                # 使用第一个可用的快捷键任务启动录音
-                if self.manager.tasks:
-                    first_task = next(iter(self.manager.tasks.values()))
-                    first_task.launch()
+                self.manager.control_task.launch()
             else:
                 logger.debug("UDP 控制：忽略 START 命令（已在录音中）")
 
         elif command == 'STOP':
             if state.recording:
                 logger.info(f"UDP 控制：停止录音 (来自 {addr[0]}:{addr[1]})")
-                # 停止所有录音任务
-                for task in self.manager.tasks.values():
+                # 停止所有录音任务，包括桌面按钮对应的独立任务
+                for task in list(self.manager.tasks.values()) + [self.manager.control_task]:
                     if task.is_recording:
                         task.finish()
             else:
                 logger.debug("UDP 控制：忽略 STOP 命令（未在录音）")
+
+        elif command == 'PAUSE_HOTKEYS':
+            self.manager.pause_hotkeys()
+            self._sock.sendto(b'PAUSED', addr)
+
+        elif command == 'RESUME_HOTKEYS':
+            self.manager.resume_hotkeys()
+            self._sock.sendto(b'RESUMED', addr)
 
         else:
             logger.warning(f"UDP 控制：未知命令 '{command}' (来自 {addr[0]}:{addr[1]})")
