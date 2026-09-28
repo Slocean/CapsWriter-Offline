@@ -332,7 +332,7 @@ internal static partial class Desktop {
     }
 
     static void BuildFloat() {
-        floatWindow=new Window { Width=floatCollapsed?258:374,Height=floatCollapsed?70:112,
+        floatWindow=new Window { Width=floatCollapsed?258:374,Height=floatCollapsed?76:142,
             WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.NoResize,
             AllowsTransparency=true,Background=Brushes.Transparent,
             Topmost=true,ShowInTaskbar=false,ShowActivated=false,
@@ -356,70 +356,93 @@ internal static partial class Desktop {
         };
         floatOuter=new Border { BorderBrush=T("#55FFFFFF","#44FFFFFF"),
             BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(26),
-            Padding=new Thickness(13,10,10,10) };
+            Padding=new Thickness(12,9,12,9) };
         var layers=new Grid();
+
         var expanded=new Grid();
-        expanded.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(36) });
-        expanded.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        expanded.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(49) });
-        expanded.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(29) });
-        expanded.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(22) });
-        expanded.Children.Add(AppMark(30));
-        var labels=new StackPanel { VerticalAlignment=VerticalAlignment.Center,
-            Margin=new Thickness(7,0,5,0) };
-        labels.Children.Add(Text("CAPSWRITER",9,"#5C5E60","#C1C2C4",true));
-        floatStatus=Text("连接中",15,"#202123","#F5F5F3",true);
-        floatStatus.Margin=new Thickness(0,3,0,0);labels.Children.Add(floatStatus);
-        floatDetail=Text("等待客户端连接",11,"#5C5E60","#C5C6C7");
-        floatDetail.Margin=new Thickness(0,3,0,0);
-        floatDetail.TextTrimming=TextTrimming.CharacterEllipsis;
-        labels.Children.Add(floatDetail);
-        Grid.SetColumn(labels,1);expanded.Children.Add(labels);
-        floatRecord=ThemeButton("●","#202123","#F0F0EE","#FFFFFF","#1C1D1E",23);
-        floatRecord.Width=44;floatRecord.Height=44;floatRecord.FontSize=19;
-        floatRecord.ToolTip="点击开始或结束录音";
-        floatRecord.Click+=(s,e)=>ToggleRecording();
-        Grid.SetColumn(floatRecord,2);expanded.Children.Add(floatRecord);
+        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(29) });
+        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
+        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(20) });
+        var top=new Grid();
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        var heading=new StackPanel { Orientation=Orientation.Horizontal };
+        heading.Children.Add(AppMark(22));
+        floatStatus=Text("连接中",13,"#202123","#F5F5F3",true);
+        floatStatus.Margin=new Thickness(8,0,0,0);
+        heading.Children.Add(floatStatus);top.Children.Add(heading);
         floatCollapseButton=ThemeButton("−","#00000000","#00000000","#515356","#D5D6D7",8);
-        floatCollapseButton.Width=27;floatCollapseButton.Height=29;
+        floatCollapseButton.Width=27;floatCollapseButton.Height=27;
         floatCollapseButton.FontSize=19;floatCollapseButton.ToolTip="收起浮窗";
         floatCollapseButton.Click+=(s,e)=>SetFloatCollapsed(true);
-        Grid.SetColumn(floatCollapseButton,3);expanded.Children.Add(floatCollapseButton);
+        Grid.SetColumn(floatCollapseButton,1);top.Children.Add(floatCollapseButton);
         var close=ThemeButton("×","#00000000","#00000000","#515356","#D5D6D7",8);
-        close.Width=22;close.Height=28;close.FontSize=18;
-        close.ToolTip="隐藏浮窗";
+        close.Width=25;close.Height=27;close.FontSize=18;close.ToolTip="隐藏浮窗";
         close.Click+=(s,e)=>{floatWindow.Hide();showFloat.IsChecked=false;};
-        Grid.SetColumn(close,4);expanded.Children.Add(close);
+        Grid.SetColumn(close,2);top.Children.Add(close);
+        expanded.Children.Add(top);
+
+        var recorder=new Grid();
+        recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        var leftWave=WaveBars(6);
+        leftWave.HorizontalAlignment=HorizontalAlignment.Right;
+        leftWave.Margin=new Thickness(0,0,13,0);
+        recorder.Children.Add(leftWave);
+        floatRecord=RecordButton(60);
+        floatRecord.Click+=(s,e)=>ToggleRecording();
+        Grid.SetColumn(floatRecord,1);recorder.Children.Add(floatRecord);
+        var rightWave=WaveBars(6);
+        rightWave.HorizontalAlignment=HorizontalAlignment.Left;
+        rightWave.Margin=new Thickness(13,0,0,0);
+        Grid.SetColumn(rightWave,2);recorder.Children.Add(rightWave);
+        Grid.SetRow(recorder,1);expanded.Children.Add(recorder);
+        floatDetail=Text("等待客户端连接",11,"#5C5E60","#C5C6C7");
+        floatDetail.TextTrimming=TextTrimming.CharacterEllipsis;
+        floatDetail.TextAlignment=TextAlignment.Center;
+        floatDetail.HorizontalAlignment=HorizontalAlignment.Center;
+        Grid.SetRow(floatDetail,2);expanded.Children.Add(floatDetail);
         layers.Children.Add(expanded);expandedFloat=expanded;
 
         var compact=new Grid();
-        compact.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(33) });
         compact.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        compact.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(41) });
-        compact.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(28) });
-        compact.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(21) });
-        compact.Children.Add(AppMark(26));
+        compact.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        compact.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        var compactLeft=new StackPanel { Orientation=Orientation.Horizontal,
+            VerticalAlignment=VerticalAlignment.Center };
         compactStatus=Text("连接中",12,"#252628","#F1F1EF",true);
-        compactStatus.Margin=new Thickness(5,0,0,0);
-        Grid.SetColumn(compactStatus,1);compact.Children.Add(compactStatus);
-        compactRecord=ThemeButton("●","#202123","#F0F0EE","#FFFFFF","#1C1D1E",19);
-        compactRecord.Width=37;compactRecord.Height=37;compactRecord.FontSize=17;
-        compactRecord.ToolTip="点击开始或结束录音";
+        compactLeft.Children.Add(compactStatus);
+        var compactLeftWave=WaveBars(3);
+        compactLeftWave.Margin=new Thickness(7,0,0,0);
+        compactLeft.Children.Add(compactLeftWave);
+        compact.Children.Add(compactLeft);
+        compactRecord=RecordButton(48);
         compactRecord.Click+=(s,e)=>ToggleRecording();
-        Grid.SetColumn(compactRecord,2);compact.Children.Add(compactRecord);
+        Grid.SetColumn(compactRecord,1);compact.Children.Add(compactRecord);
+        var compactRight=new StackPanel { Orientation=Orientation.Horizontal,
+            HorizontalAlignment=HorizontalAlignment.Right,
+            VerticalAlignment=VerticalAlignment.Center };
+        var compactRightWave=WaveBars(3);
+        compactRightWave.Margin=new Thickness(0,0,5,0);
+        compactRight.Children.Add(compactRightWave);
         var expandButton=ThemeButton("↗","#00000000","#00000000","#515356","#D5D6D7",8);
-        expandButton.Width=27;expandButton.Height=28;expandButton.FontSize=15;
+        expandButton.Width=25;expandButton.Height=28;expandButton.FontSize=15;
         expandButton.ToolTip="展开浮窗";
         expandButton.Click+=(s,e)=>SetFloatCollapsed(false);
-        Grid.SetColumn(expandButton,3);compact.Children.Add(expandButton);
+        compactRight.Children.Add(expandButton);
         var compactClose=ThemeButton("×","#00000000","#00000000","#515356","#D5D6D7",8);
-        compactClose.Width=21;compactClose.Height=28;compactClose.FontSize=17;
+        compactClose.Width=22;compactClose.Height=28;compactClose.FontSize=17;
         compactClose.ToolTip="隐藏浮窗";
         compactClose.Click+=(s,e)=>{floatWindow.Hide();showFloat.IsChecked=false;};
-        Grid.SetColumn(compactClose,4);compact.Children.Add(compactClose);
+        compactRight.Children.Add(compactClose);
+        Grid.SetColumn(compactRight,2);compact.Children.Add(compactRight);
         compact.Visibility=floatCollapsed?Visibility.Visible:Visibility.Collapsed;
         expanded.Visibility=floatCollapsed?Visibility.Collapsed:Visibility.Visible;
         layers.Children.Add(compact);compactFloat=compact;
+        waveTick=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(55) };
+        waveTick.Tick+=(s,e)=>AnimateWave();
         floatOuter.Child=layers;
         floatOuter.MouseLeftButtonDown+=(s,e)=>{
             if(e.LeftButton!=MouseButtonState.Pressed)return;
@@ -630,18 +653,18 @@ internal static partial class Desktop {
             (lastText.Length>160?"…"+lastText.Substring(lastText.Length-160):lastText):
             "等待录音。你说的话会出现在这里。";
         mainRecord.Content=recording?"■  结束录音":"●  开始录音";
-        floatRecord.Content=recording?"■":"●";
-        compactRecord.Content=floatRecord.Content;
+        SetRecordButtonVisual(floatRecord,recording);
+        SetRecordButtonVisual(compactRecord,recording);
+        UpdateWaveAnimation();
         mainRecord.Background=recording?T("#FCE8E8","#6A3236"):T("#222326","#F0F0EE");
         mainRecord.Foreground=recording?T("#A93D44","#FFFFFF"):T("#FFFFFF","#1C1D1E");
-        floatRecord.Background=recording?T("#D95B62","#B94F56"):T("#202123","#F0F0EE");
-        compactRecord.Background=floatRecord.Background;
         mainRecord.IsEnabled=floatRecord.IsEnabled=compactRecord.IsEnabled=alive&&connected;
         tray.Text=recording?"CapsWriter · 正在录音":"CapsWriter · "+(connected?"已连接":"未连接");
     }
     static void Exit() {
         if(exiting) return; exiting=true;
         if(tick!=null) tick.Stop();
+        if(waveTick!=null) waveTick.Stop();
         if(tray!=null){tray.Visible=false;tray.Dispose();tray=null;}
         if(backend!=null){try{if(ownsBackend&&!backend.HasExited){backend.Kill();backend.WaitForExit(3000);}}catch{}backend.Dispose();backend=null;}
         if(floatWindow!=null) floatWindow.Close();

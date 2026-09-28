@@ -9,6 +9,8 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Rectangle = System.Windows.Shapes.Rectangle;
+using Ellipse = System.Windows.Shapes.Ellipse;
 
 internal static partial class Desktop {
     sealed class ThemeInk : INotifyPropertyChanged {
@@ -33,6 +35,9 @@ internal static partial class Desktop {
     static TextBlock compactStatus;
     static TextBlock glassValue;
     static Border floatOuter;
+    static System.Windows.Threading.DispatcherTimer waveTick;
+    static readonly List<Rectangle> waveBars = new List<Rectangle>();
+    static double wavePhase;
     static UIElement expandedFloat, compactFloat;
     static Slider glassSlider;
     static Button liveModeButton, batchModeButton;
@@ -192,13 +197,69 @@ internal static partial class Desktop {
         expandedFloat.Visibility=value?Visibility.Collapsed:Visibility.Visible;
         compactFloat.Visibility=value?Visibility.Visible:Visibility.Collapsed;
         floatWindow.Width=value?258:374;
-        floatWindow.Height=value?70:112;
+        floatWindow.Height=value?76:142;
         if (floatCollapseButton!=null) floatCollapseButton.Content="−";
         var work=SystemParameters.WorkArea;
         floatWindow.Left=Math.Max(work.Left,Math.Min(floatWindow.Left,work.Right-floatWindow.Width));
         floatWindow.Top=Math.Max(work.Top,Math.Min(floatWindow.Top,work.Bottom-floatWindow.Height));
         ApplyGlass();
         SaveUiPrefs();
+    }
+    static Button RecordButton(double size) {
+        var button=ThemeButton("", "#202123","#F0F0EE","#FFFFFF","#1C1D1E",size/2);
+        button.Width=size;button.Height=size;button.Padding=new Thickness(0);
+        button.ToolTip="点击开始录音";
+        var glyph=new Grid { Width=28,Height=28 };
+        glyph.Children.Add(new Ellipse { Width=size>=60?18:15,Height=size>=60?18:15,
+            Fill=T("#FFFFFF","#1C1D1E"),HorizontalAlignment=HorizontalAlignment.Center,
+            VerticalAlignment=VerticalAlignment.Center });
+        glyph.Children.Add(new Border { Width=size>=60?25:21,Height=size>=60?25:21,
+            CornerRadius=new CornerRadius(5),Background=B("#202123"),
+            HorizontalAlignment=HorizontalAlignment.Center,
+            VerticalAlignment=VerticalAlignment.Center,
+            Visibility=Visibility.Collapsed });
+        button.Content=glyph;
+        return button;
+    }
+    static void SetRecordButtonVisual(Button button, bool active) {
+        if(button==null)return;
+        var glyph=button.Content as Grid;
+        if(glyph==null)return;
+        glyph.Children[0].Visibility=active?Visibility.Collapsed:Visibility.Visible;
+        glyph.Children[1].Visibility=active?Visibility.Visible:Visibility.Collapsed;
+        button.Background=active?B("#F7F7F5"):T("#202123","#F0F0EE");
+        button.ToolTip=active?"点击结束录音":"点击开始录音";
+    }
+    static StackPanel WaveBars(int count) {
+        var row=new StackPanel { Orientation=Orientation.Horizontal,
+            VerticalAlignment=VerticalAlignment.Center,Opacity=0 };
+        for(int i=0;i<count;i++) {
+            var bar=new Rectangle { Width=3,Height=4,RadiusX=1.5,RadiusY=1.5,
+                Fill=T("#55585B","#E1E2DF"),Margin=new Thickness(2,0,2,0),
+                VerticalAlignment=VerticalAlignment.Center,Tag=row };
+            row.Children.Add(bar);waveBars.Add(bar);
+        }
+        return row;
+    }
+    static void AnimateWave() {
+        wavePhase+=0.21;
+        for(int i=0;i<waveBars.Count;i++) {
+            double pulse=Math.Abs(Math.Sin(wavePhase+i*0.66));
+            double swell=Math.Abs(Math.Sin(wavePhase*0.43-i*0.32));
+            waveBars[i].Height=4+Math.Round((pulse*0.7+swell*0.3)*19);
+        }
+    }
+    static void UpdateWaveAnimation() {
+        if(waveTick==null)return;
+        bool active=recording && floatWindow!=null && floatWindow.IsVisible;
+        if(active) {
+            if(!waveTick.IsEnabled)waveTick.Start();
+        } else if(waveTick.IsEnabled)waveTick.Stop();
+        foreach(var bar in waveBars) {
+            var row=bar.Tag as StackPanel;
+            if(row!=null)row.Opacity=active?1:0;
+            if(!active)bar.Height=4;
+        }
     }
     static void ApplyGlass() {
         if (floatOuter == null) return;
