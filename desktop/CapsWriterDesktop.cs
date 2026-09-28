@@ -13,7 +13,6 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
@@ -294,7 +293,7 @@ internal static partial class Desktop {
         glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(90) });
         glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(42) });
-        glassRow.Children.Add(Text("玻璃强度",11,"#747679","#A7A9AB"));
+        glassRow.Children.Add(Text("背景浓度",11,"#747679","#A7A9AB"));
         glassSlider=new Slider { Minimum=0,Maximum=100,Value=glassStrength,
             VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,12,0),
             TickFrequency=5,IsSnapToTickEnabled=true };
@@ -357,8 +356,7 @@ internal static partial class Desktop {
         };
         floatOuter=new Border { BorderBrush=T("#55FFFFFF","#44FFFFFF"),
             BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(26),
-            Padding=new Thickness(13,10,10,10),
-            Effect=new DropShadowEffect { Color=Colors.Black,Opacity=.24,BlurRadius=22,ShadowDepth=5 } };
+            Padding=new Thickness(13,10,10,10) };
         var layers=new Grid();
         var expanded=new Grid();
         expanded.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(36) });

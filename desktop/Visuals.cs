@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -201,52 +200,14 @@ internal static partial class Desktop {
         ApplyGlass();
         SaveUiPrefs();
     }
-    static void ClipFloatCorners() {
-        if(floatWindow==null)return;
-        var hwnd=new System.Windows.Interop.WindowInteropHelper(floatWindow).Handle;
-        if(hwnd==IntPtr.Zero)return;
-        var source=PresentationSource.FromVisual(floatWindow);
-        double sx=source!=null?source.CompositionTarget.TransformToDevice.M11:1;
-        double sy=source!=null?source.CompositionTarget.TransformToDevice.M22:1;
-        int width=(int)Math.Ceiling(floatWindow.Width*sx);
-        int height=(int)Math.Ceiling(floatWindow.Height*sy);
-        IntPtr region=CreateRoundRectRgn(0,0,width+1,height+1,
-            (int)Math.Round(52*sx),(int)Math.Round(52*sy));
-        if(region!=IntPtr.Zero && SetWindowRgn(hwnd,region,true)==0)DeleteObject(region);
-    }
     static void ApplyGlass() {
-        if (floatOuter==null) return;
-        byte alpha=(byte)(75+glassStrength*1.5);
-        var baseColor=darkTheme?Color.FromArgb(alpha,23,24,26):Color.FromArgb(alpha,248,248,246);
-        floatOuter.Background=new SolidColorBrush(baseColor);
-        if (glassValue!=null) glassValue.Text=((int)Math.Round(glassStrength)).ToString()+"%";
-        if (floatWindow==null || new System.Windows.Interop.WindowInteropHelper(floatWindow).Handle==IntPtr.Zero) return;
-        var h=new System.Windows.Interop.WindowInteropHelper(floatWindow).Handle;
-        ClipFloatCorners();
-        AccentPolicy accent=new AccentPolicy();
-        accent.AccentState=glassStrength<1?2:4; // transparent or Windows acrylic blur
-        accent.AccentFlags=2;
-        int tint=darkTheme?0x18:0xF8;
-        accent.GradientColor=(alpha<<24)|(tint<<16)|(tint<<8)|tint;
-        int size=Marshal.SizeOf(typeof(AccentPolicy));
-        IntPtr memory=Marshal.AllocHGlobal(size);
-        try {
-            Marshal.StructureToPtr(accent,memory,false);
-            var attribute=new WindowCompositionAttributeData { Attribute=19,Data=memory,SizeOfData=size };
-            try { SetWindowCompositionAttribute(h,ref attribute); }
-            catch (EntryPointNotFoundException) {}
-        } finally { Marshal.FreeHGlobal(memory); }
+        if (floatOuter == null) return;
+        byte alpha = (byte)(75 + glassStrength * 1.5);
+        var baseColor = darkTheme
+            ? Color.FromArgb(alpha, 23, 24, 26)
+            : Color.FromArgb(alpha, 248, 248, 246);
+        floatOuter.Background = new SolidColorBrush(baseColor);
+        if (glassValue != null)
+            glassValue.Text = ((int)Math.Round(glassStrength)).ToString() + "%";
     }
-    [StructLayout(LayoutKind.Sequential)]
-    struct AccentPolicy { public int AccentState, AccentFlags, GradientColor, AnimationId; }
-    [StructLayout(LayoutKind.Sequential)]
-    struct WindowCompositionAttributeData { public int Attribute; public IntPtr Data; public int SizeOfData; }
-    [DllImport("user32.dll")]
-    static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
-    [DllImport("gdi32.dll")]
-    static extern IntPtr CreateRoundRectRgn(int left,int top,int right,int bottom,int ellipseWidth,int ellipseHeight);
-    [DllImport("user32.dll")]
-    static extern int SetWindowRgn(IntPtr hwnd,IntPtr region,bool redraw);
-    [DllImport("gdi32.dll")]
-    static extern bool DeleteObject(IntPtr obj);
 }
