@@ -191,3 +191,14 @@ models/**/*.cfg
 # Local desktop build
 /CapsWriterDesktop.exe
 /desktop_ui.ini
+
+# 远程识别与网页管理：运行时生成的本地数据与凭据（绝不入库）
+admin/data/
+server_tokens.json*
+server_settings.json*
+admin_settings.json
+logs/
+.venv-test/
+
+# 仓库内正式测试不忽略
+!tests/test_*.py
