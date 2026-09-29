@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -12,6 +13,30 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 class ServerConfig:
     addr = '0.0.0.0'
     port = '6016'
+
+    # —— 远程访问鉴权（远程识别与网页管理） ——
+    # 'required'   : 所有连接（含局域网直连）握手时必须携带有效客户端令牌
+    # 'lan_legacy' : 可信局域网直连沿用旧行为（免令牌）；凡携带网关标记请求头
+    #                （X-Forwarded-For 等）的连接一律要求令牌，公网路径绝不匿名
+    auth_mode = 'lan_legacy'
+    tokens_path = Path() / 'server_tokens.json'   # 客户端令牌存储（只存哈希，不明文）
+    lan_trusted_networks = [                      # 视为可信局域网的来源网段
+        '127.0.0.0/8', '::1/128',
+        '192.168.0.0/16', '10.0.0.0/8', '172.16.0.0/12',
+    ]
+    gateway_markers = ('x-forwarded-for', 'x-real-ip')  # 出现任一即视为经反代/网关转发
+
+    # —— WebSocket 资源上限 ——
+    # 单条消息上限：文件转录按 60s 分段发送约 5MB（base64），留出余量；
+    # 超限连接会被服务端主动断开，不会拖垮识别进程。
+    ws_max_message_size = 64 * 1024 * 1024
+    ws_max_connections = 8                  # 同时连接数上限（每个客户端一条连接）
+    ws_max_queue = (16, 8)                  # 每连接待处理帧高/低水位（帧数）
+
+    # —— ASR 控制通道（管理进程专用，仅监听回环） ——
+    # 0 表示禁用控制通道；管理进程将退化为仅 PID/端口级别的监控与控制
+    control_port = 6019
+    control_token_path = Path() / 'logs' / 'server_control.token'
 
     # 语音模型选择：'qwen_asr', 'fun_asr_nano', 'sensevoice', 'paraformer'
     model_type = 'qwen_asr'
@@ -35,6 +60,37 @@ class ServerConfig:
     # 集成显卡兼容性补丁
     # os.environ["GGML_VK_DISABLE_COOPMAT"] = "1"   # AMD集显无法加载 GGUF 模型时尝试
     # os.environ["GGML_VK_DISABLE_F16"] = "1"       # 集成显卡解码有误，强制熔断时尝试
+
+
+# 网页管理端写入的运行时设置覆盖（admin 进程负责校验与原子写入）
+# 仅允许白名单字段覆盖，文件损坏或含未知字段时按行忽略，不影响服务启动
+_SETTINGS_FILE = Path(BASE_DIR) / 'server_settings.json'
+
+
+def _apply_settings_overlay() -> None:
+    if not _SETTINGS_FILE.exists():
+        return
+    try:
+        data = json.loads(_SETTINGS_FILE.read_text(encoding='utf-8'))
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    for key, value in data.items():
+        if key in _SETTINGS_ALLOWLIST:
+            setattr(ServerConfig, key, value)
+
+
+_SETTINGS_ALLOWLIST = frozenset({
+    'model_type',           # 模型选择，改后需重启识别进程
+    'log_level',            # 日志级别
+    'aligner_idle_timeout',
+    'gpu_boost_enabled',
+    'auth_mode',            # 鉴权模式，握手时动态读取，即时生效
+})
+
+
+_apply_settings_overlay()
 
 
 

@@ -20,6 +20,8 @@ from ..state import console
 from .. import logger
 import asyncio
 
+from .credentials import load_token
+
 
 if TYPE_CHECKING:
     from core.client.state import ClientState
@@ -29,6 +31,34 @@ if TYPE_CHECKING:
 class CommunicationError(Exception):
     """通信层通用异常"""
     pass
+
+
+def build_server_url() -> str:
+    """
+    依据配置生成服务端完整 URL
+
+    - 配置了 server_url（ws:// 或 wss://）时优先使用；
+    - 否则按 addr + port 拼 ws://（兼容旧配置）。
+
+    Raises:
+        ValueError: server_url 非法（协议必须是 ws/wss）
+    """
+    raw = (getattr(Config, 'server_url', '') or '').strip()
+    if raw:
+        if not raw.lower().startswith(('ws://', 'wss://')):
+            raise ValueError(f"server_url 必须以 ws:// 或 wss:// 开头: {raw.split(':')[0]}://…")
+        return raw.rstrip('/')
+    return f"ws://{Config.addr}:{Config.port}"
+
+
+def _handshake_headers() -> dict:
+    """握手鉴权头；令牌值绝不写入日志或异常"""
+    token = (getattr(Config, 'server_token', '') or '').strip()
+    if not token:
+        token = load_token().strip()
+    if not token:
+        return {}
+    return {'Authorization': f'Bearer {token}'}
 
 
 class WebSocketManager:
@@ -80,7 +110,17 @@ class WebSocketManager:
         if self.state.websocket is not None:
             self.state.websocket = None
 
-        url = f"ws://{Config.addr}:{Config.port}"
+        try:
+            url = build_server_url()
+        except ValueError as e:
+            logger.error(f"服务端地址配置无效: {e}")
+            console.print(f'[bold red]服务端地址配置无效，请检查“远程地址”设置[/bold red]\n')
+            return False
+
+        headers = _handshake_headers()
+        secure = url.lower().startswith('wss://')
+        if not secure:
+            console.print(f'[grey50]提示：ws:// 为明文连接，仅适合可信局域网[/grey50]')
 
         try:
             if not self._connect_fail_logged:
@@ -95,8 +135,13 @@ class WebSocketManager:
 
             # websockets>=16.0 默认走代理，本地连接需显式禁用，但 14 才引入这个参数
             if tuple(int(v) for v in websockets.__version__.split(".")) >= (14,):
-                kwargs["proxy"] = None  
-            
+                kwargs["proxy"] = None
+                if headers:
+                    kwargs["additional_headers"] = headers
+            elif headers:
+                kwargs["extra_headers"] = headers
+
+            # wss:// 始终验证服务端证书（使用系统信任库），不提供关闭校验的选项
             self.state.websocket = await websockets.connect(**kwargs)
 
             console.print(f'[bold green]已连接服务端: {url}[/bold green]\n')
@@ -108,11 +153,18 @@ class WebSocketManager:
             if not self._connect_fail_logged:
                 logger.debug(f"连接服务端 {url} 被拒绝或超时")
                 self._connect_fail_logged = True
+        except websockets.exceptions.InvalidStatus as e:
+            # 握手被服务端拒绝（如 401 鉴权失败）——给出可操作的提示
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            if not self._connect_fail_logged:
+                logger.error(f"连接服务端 {url} 被拒绝（HTTP {status}）：请检查客户端令牌是否有效")
+                self._connect_fail_logged = True
+            console.print(f'[bold red]服务端拒绝连接 (HTTP {status})：请检查客户端令牌[/bold red]\n')
         except Exception as e:
             if not self._connect_fail_logged:
                 logger.debug(f"连接服务端 {url} 失败: {e}")
                 self._connect_fail_logged = True
-        
+
         return False
     
     async def send(self, message: AudioMessage) -> bool:

@@ -6,7 +6,9 @@ onnxruntime-directml
 
 # basic
 rich
-websockets
+# 远程识别握手鉴权与控制通道依赖 14+ 的 additional_headers/proxy 参数；
+# 上限 <18：18.x 移除了旧参数名，升级前需回归 tests/test_ws_handshake_integration.py
+websockets>=14,<18
 watchdog
 pypinyin
 

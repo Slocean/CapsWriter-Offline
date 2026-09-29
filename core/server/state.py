@@ -50,6 +50,9 @@ class ServerState:
     # 识别子进程
     recognize_process: Optional[Process] = None
 
+    # 最近一次向客户端发送识别结果的时间（供控制通道判断“识别中”）
+    last_result_time: float = 0.0
+
 
 
 @dataclass

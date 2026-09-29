@@ -12,7 +12,8 @@ sounddevice
 watchdog
 
 # network and api 
-websockets
+# wss 远程地址与令牌握手头需要 14+；<18 与服务端保持一致
+websockets>=14,<18
 openai
 ollama
 httpx

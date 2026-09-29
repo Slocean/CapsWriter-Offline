@@ -8,11 +8,13 @@ CapsWriter Offline 服务端主程序门面类 (Facade)
 """
 
 import os
+import time
 import asyncio
 from pathlib import Path
 from config_server import ServerConfig as Config, __version__
 from .state import ServerState, console
 from core.tools.signal_handler import register_signal
+from core.tools.win_instance import InstanceMutex, write_pid_file, clear_pid_file
 from .worker.process_manager import ProcessManager
 from .connection.server_manager import SocketManager
 from .ui.tray_manager import TrayManager
@@ -21,7 +23,7 @@ from . import logger
 class CapsWriterServer:
     """
     CapsWriter 服务端外观类
-    
+
     管理的外部接口极其简洁：start()。
     """
     def __init__(self):
@@ -43,6 +45,8 @@ class CapsWriterServer:
 
         self.version = __version__
         self.is_alive = False
+        self.started_at = None
+        self._instance_mutex = None
 
 
     def _print_banner(self):
@@ -60,7 +64,7 @@ class CapsWriterServer:
         """
         # 防连续触发
         if not self.is_alive: return
-        self.is_alive = False 
+        self.is_alive = False
 
         logger.info("=" * 50)
         logger.info("开始清理服务端资源...")
@@ -76,7 +80,13 @@ class CapsWriterServer:
         # 3. 停止托盘图标
         self.tray_manager.stop()
 
-        # 4. 最后停止协程（需在其他资源释放之后）
+        # 4. 释放实例登记（PID 文件与互斥锁）
+        clear_pid_file(self.base_dir / 'logs' / 'server.pid')
+        if self._instance_mutex is not None:
+            self._instance_mutex.release()
+            self._instance_mutex = None
+
+        # 5. 最后停止协程（需在其他资源释放之后）
         self.loop.stop()
 
         logger.info("服务端资源清理完成")
@@ -86,12 +96,28 @@ class CapsWriterServer:
     def start(self):
         """
         同步启动服务端 (主入口)
-        
+
         注册信号处理、拉起子进程并进入网络服务监听循环。
         """
         # 防连续触发
         if self.is_alive: return
         self.is_alive = True
+
+        # 实例登记：命名互斥锁 + PID 文件，保证模型最多一个实例，并供管理进程核对
+        mutex = InstanceMutex()
+        mutex.__enter__()
+        if not mutex.acquired:
+            logger.error("检测到已有 CapsWriter 服务端实例正在运行（互斥锁被占用），本次启动退出。")
+            mutex.release()
+            self.is_alive = False
+            console.print('[red]检测到已有服务端实例正在运行，请勿重复启动。')
+            return
+        self._instance_mutex = mutex
+        self.started_at = time.time()
+        try:
+            write_pid_file(self.base_dir / 'logs' / 'server.pid')
+        except OSError as e:
+            logger.warning(f"PID 文件写入失败（管理页将无法核对进程身份）: {e}")
 
         # 注册退出信号处理
         register_signal(self.stop)
@@ -102,9 +128,9 @@ class CapsWriterServer:
 
         # 拉起识别子进程
         self.process_manager.start()
-        
+
         # 开启网络服务监听 (接管当前线程直至退出)
         try:
-            self.loop.run_until_complete(self.socket_manager.start()) 
+            self.loop.run_until_complete(self.socket_manager.start())
         except RuntimeError:
             pass

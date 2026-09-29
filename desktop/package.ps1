@@ -31,6 +31,10 @@ Copy-Item -LiteralPath (Join-Path $repo 'core\client\shortcut\shortcut_manager.p
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\shortcut\event_handler.py') -Destination (Join-Path $dest 'core\client\shortcut\event_handler.py') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\shortcut\key_mapper.py') -Destination (Join-Path $dest 'core\client\shortcut\key_mapper.py') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\udp\udp_control.py') -Destination (Join-Path $dest 'core\client\udp\udp_control.py') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'core\client\connection\websocket_manager.py') -Destination (Join-Path $dest 'core\client\connection\websocket_manager.py') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'core\client\connection\credentials.py') -Destination (Join-Path $dest 'core\client\connection\credentials.py') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'config_client.py') -Destination (Join-Path $dest 'config_client.py') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'core\protocol.py') -Destination (Join-Path $dest 'core\protocol.py') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $dest 'Desktop-README.md') -Force
 $cfg = Join-Path $dest 'config_client.py'
 $content = [System.IO.File]::ReadAllText($cfg, [System.Text.Encoding]::UTF8)

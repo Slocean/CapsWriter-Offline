@@ -39,12 +39,15 @@ internal static partial class Desktop {
     static Forms.NotifyIcon tray;
     static Process backend;
     static DispatcherTimer tick;
-    static TextBox host, port, seconds, contextWords, logBox;
-    static TextBlock status, transcript, floatStatus, floatDetail, heroHint, sideStatus;
+    static TextBox host, port, seconds, contextWords, logBox, urlField;
+    static PasswordBox tokenField;
+    static TextBlock status, transcript, floatStatus, floatDetail, heroHint, sideStatus, tokenHint, serverHint;
+    static UIElement lanFields, remoteFields;
+    static Button lanModeButton, remoteModeButton;
     static Ellipse sideDot, floatConnectionDot;
     static Button mainRecord, floatRecord;
     static CheckBox showFloat;
-    static bool connected, recording, processing, exiting, ownsBackend;
+    static bool connected, recording, processing, exiting, ownsBackend, remoteMode;
     static string lastText = "";
     static DateTime started;
     static long logPosition;
@@ -260,11 +263,33 @@ internal static partial class Desktop {
         serverHeading.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         serverHeading.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
         serverHeading.Children.Add(Text("服务器",13,"#333538","#E6E7E6",true));
+        var serverActions=new StackPanel { Orientation=Orientation.Horizontal };
         var restart=ThemeButton("重新连接","#F1F2F0","#303235","#4A4C4F","#D1D3D3",8);
         restart.Width=88;restart.Height=30;restart.FontSize=11;
-        restart.Click+=(s,e)=>RestartBackend();
-        Grid.SetColumn(restart,1);serverHeading.Children.Add(restart);
+        restart.Click+=(s,e)=>{RestartBackend();status.Text="正在重新连接";};
+        serverActions.Children.Add(restart);
+        var test=ThemeButton("测试连接","#F1F2F0","#303235","#4A4C4F","#D1D3D3",8);
+        test.Width=88;test.Height=30;test.FontSize=11;test.Margin=new Thickness(8,0,0,0);
+        test.Click+=(s,e)=>{
+            if(!SaveSettings(false))return;
+            RestartBackend();status.Text="正在测试连接";
+        };
+        serverActions.Children.Add(test);
+        Grid.SetColumn(serverActions,1);serverHeading.Children.Add(serverActions);
         server.Children.Add(serverHeading);
+
+        var serverModeRow=new StackPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(0,12,0,0) };
+        lanModeButton=ThemeButton("局域网","#222326","#F0F0EE","#FFFFFF","#1C1D1E",9);
+        lanModeButton.Width=92;lanModeButton.Height=34;
+        lanModeButton.Click+=(s,e)=>SelectServerMode(false);
+        serverModeRow.Children.Add(lanModeButton);
+        remoteModeButton=ThemeButton("远程 wss","#F1F2F0","#303235","#4A4C4F","#D1D3D3",9);
+        remoteModeButton.Width=92;remoteModeButton.Height=34;remoteModeButton.Margin=new Thickness(8,0,0,0);
+        remoteModeButton.Click+=(s,e)=>SelectServerMode(true);
+        serverModeRow.Children.Add(remoteModeButton);
+        server.Children.Add(serverModeRow);
+
+        var lanPanel=new StackPanel();
         var fields=new Grid { Margin=new Thickness(0,12,0,0) };
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(2,GridUnitType.Star) });
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
@@ -281,7 +306,45 @@ internal static partial class Desktop {
         save.Width=76;save.Height=42;save.VerticalAlignment=VerticalAlignment.Bottom;
         save.Click+=(s,e)=>SaveSettings(true);
         Grid.SetColumn(save,2);fields.Children.Add(save);
-        server.Children.Add(fields);body.Children.Add(Surface(server,19));
+        lanPanel.Children.Add(fields);
+        lanFields=lanPanel;
+        server.Children.Add(lanFields);
+
+        var remotePanel=new StackPanel();
+        var remoteGrid=new Grid { Margin=new Thickness(0,12,0,0) };
+        remoteGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(2,GridUnitType.Star) });
+        remoteGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        remoteGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        var urlCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
+        urlCol.Children.Add(Text("远程地址",11,"#747679","#A7A9AB"));
+        urlField=Field();urlField.Margin=new Thickness(0,5,0,0);
+        urlField.ToolTip="完整的 wss:// 服务地址，例如 wss://voice.example.com";
+        urlCol.Children.Add(urlField);
+        remoteGrid.Children.Add(urlCol);
+        var tokenCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
+        tokenCol.Children.Add(Text("客户端令牌",11,"#747679","#A7A9AB"));
+        tokenField=new PasswordBox { Height=42,FontSize=14,Foreground=T("#202123","#F1F1EF"),
+            Background=T("#FAFAF9","#242527"),BorderBrush=T("#DCDDDC","#45474A"),BorderThickness=new Thickness(1),
+            Padding=new Thickness(11,9,11,7),VerticalContentAlignment=VerticalAlignment.Center };
+        tokenField.Margin=new Thickness(0,5,0,0);
+        tokenCol.Children.Add(tokenField);
+        Grid.SetColumn(tokenCol,1);remoteGrid.Children.Add(tokenCol);
+        var saveRemote=ThemeButton("保存","#222326","#F0F0EE","#FFFFFF","#1C1D1E",9);
+        saveRemote.Width=76;saveRemote.Height=42;saveRemote.VerticalAlignment=VerticalAlignment.Bottom;
+        saveRemote.Click+=(s,e)=>SaveSettings(true);
+        Grid.SetColumn(saveRemote,2);remoteGrid.Children.Add(saveRemote);
+        remotePanel.Children.Add(remoteGrid);
+        tokenHint=Text("令牌以当前 Windows 用户加密保存，不会写入配置或日志；便携包复制到新电脑需重新录入。",11,"#85878A","#A7A9AB");
+        tokenHint.TextWrapping=TextWrapping.Wrap;tokenHint.Margin=new Thickness(0,8,0,0);
+        remotePanel.Children.Add(tokenHint);
+        remoteFields=remotePanel;
+        remoteFields.Visibility=Visibility.Collapsed;
+        server.Children.Add(remoteFields);
+
+        serverHint=Text("",11,"#85878A","#A7A9AB");
+        serverHint.TextWrapping=TextWrapping.Wrap;serverHint.Margin=new Thickness(0,8,0,0);
+        server.Children.Add(serverHint);
+        body.Children.Add(Surface(server,19));
 
         var appearance=new StackPanel();
         appearance.Children.Add(Text("浮窗",13,"#333538","#E6E7E6",true));
@@ -484,6 +547,11 @@ internal static partial class Desktop {
         var content=ReadConfig();
         host.Text=Value(content,"addr","127.0.0.1");
         port.Text=Value(content,"port","6016");
+        string remoteUrl=Value(content,"server_url","");
+        remoteMode=remoteUrl.StartsWith("ws://",StringComparison.OrdinalIgnoreCase)
+            || remoteUrl.StartsWith("wss://",StringComparison.OrdinalIgnoreCase);
+        urlField.Text=remoteMode?remoteUrl:"";
+        LoadStoredToken();
         seconds.Text=Value(content,"pause_seconds","0.75");
         liveMode=Value(content,"pause_segmented",
             Value(content,"live_output","True"))=="True";
@@ -495,6 +563,32 @@ internal static partial class Desktop {
             previous<0.3 || previous>2.5) seconds.Text="0.75";
         showFloat.IsChecked=true;
         LoadShortcutSettings(content);
+        UpdateServerModeButtons();
+    }
+    static void SelectServerMode(bool remote) {
+        remoteMode=remote;
+        UpdateServerModeButtons();
+        SaveSettings(false);
+    }
+    static void UpdateServerModeButtons() {
+        if (lanModeButton==null || remoteModeButton==null) return;
+        lanModeButton.Background=remoteMode?T("#F1F2F0","#303235"):T("#222326","#F0F0EE");
+        lanModeButton.Foreground=remoteMode?T("#4A4C4F","#D1D3D3"):T("#FFFFFF","#1C1D1E");
+        remoteModeButton.Background=remoteMode?T("#222326","#F0F0EE"):T("#F1F2F0","#303235");
+        remoteModeButton.Foreground=remoteMode?T("#FFFFFF","#1C1D1E"):T("#4A4C4F","#D1D3D3");
+        if (lanFields!=null) lanFields.Visibility=remoteMode?Visibility.Collapsed:Visibility.Visible;
+        if (remoteFields!=null) remoteFields.Visibility=remoteMode?Visibility.Visible:Visibility.Collapsed;
+        if (serverHint!=null) serverHint.Text=remoteMode?
+            "远程地址走加密 wss 通道，适合家庭网络之外；服务器需已开启客户端令牌。":
+            "局域网地址为明文 ws 连接，仅适合可信网络；服务器未开启强制鉴权时可免令牌。";
+        if (tokenHint!=null && tokenField!=null)
+            tokenHint.Text=(tokenField.Tag==TokenSavedMarker)?
+                "已保存令牌（以当前 Windows 用户加密存储）。更换令牌时输入新值并保存。":
+                "令牌以当前 Windows 用户加密保存，不会写入配置或日志；便携包复制到新电脑需重新录入。";
+    }
+    static string ServerDisplay() {
+        if (remoteMode && !String.IsNullOrWhiteSpace(urlField.Text)) return urlField.Text.Trim();
+        return host.Text.Trim()+":"+port.Text.Trim();
     }
     static string Set(string source,string key,string value) {
         string pattern=@"(?m)^(\s*"+Regex.Escape(key)+@"\s*=\s*).*$";
@@ -505,12 +599,22 @@ internal static partial class Desktop {
         EndShortcutCapture();
         if(!ValidateShortcutSettings())return false;
         string hostname=host.Text.Trim();
-        ushort pn; double duration;
-        if (hostname.Length==0 || hostname.Length>253 || !Regex.IsMatch(hostname,@"^[a-zA-Z0-9.:-]+$") ||
-            !UInt16.TryParse(port.Text.Trim(),out pn) || pn==0 ||
-            !Double.TryParse(seconds.Text.Trim(),System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture,out duration) || duration<0.3 || duration>2.5) {
-            MessageBox.Show("请检查服务器地址、1–65535 端口，以及 0.3–2.5 秒的停顿判定。"); return false;
+        ushort pn=0; double duration;
+        string remoteUrl=urlField!=null?urlField.Text.Trim():"";
+        if (remoteMode) {
+            if (remoteUrl.Length==0 || remoteUrl.Length>300 ||
+                !Regex.IsMatch(remoteUrl,@"^wss?://[A-Za-z0-9.\-_:]+(:\d{1,5})?(/[^\s]*)?$",
+                    RegexOptions.IgnoreCase)) {
+                MessageBox.Show("远程地址必须是完整的 ws:// 或 wss:// 地址，例如 wss://voice.example.com。");
+                return false;
+            }
+        } else if (hostname.Length==0 || hostname.Length>253 || !Regex.IsMatch(hostname,@"^[a-zA-Z0-9.:-]+$") ||
+            !UInt16.TryParse(port.Text.Trim(),out pn) || pn==0) {
+            MessageBox.Show("请检查服务器地址与 1–65535 端口。"); return false;
+        }
+        if (!Double.TryParse(seconds.Text.Trim(),System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,out duration) || duration<0.3 || duration>2.5) {
+            MessageBox.Show("停顿判定须在 0.3–2.5 秒之间。"); return false;
         }
         string prompt=contextWords.Text.Trim();
         if(prompt.Length>120 || prompt.IndexOfAny(new[]{'\r','\n'})>=0) {
@@ -518,8 +622,13 @@ internal static partial class Desktop {
         }
         var content=ReadConfig();
         string updated=content;
-        updated=Set(updated,"addr","'"+hostname+"'");
-        updated=Set(updated,"port","'"+pn+"'");
+        if (remoteMode) {
+            updated=Set(updated,"server_url","'"+remoteUrl+"'");
+        } else {
+            updated=Set(updated,"server_url","''");
+            updated=Set(updated,"addr","'"+hostname+"'");
+            updated=Set(updated,"port","'"+pn+"'");
+        }
         updated=Set(updated,"mic_seg_duration","60");
         updated=Set(updated,"mic_seg_overlap",liveMode?"0":"4");
         updated=Set(updated,"pause_seconds",duration.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -535,9 +644,53 @@ internal static partial class Desktop {
             File.Copy(Config,Config+".bak",true);
             File.WriteAllText(Config,updated,new UTF8Encoding(false));
         }
+        // 令牌绝不写入配置文件，只进当前用户 DPAPI 凭据存储
+        if (remoteMode && tokenField!=null && tokenField.Password.Length>0) {
+            try { SaveStoredToken(tokenField.Password.Trim()); }
+            catch (Exception ex) { MessageBox.Show("令牌保存失败："+ex.Message); return false; }
+            tokenField.Clear();
+            UpdateServerModeButtons();
+        }
         if(restart) { RestartBackend(); status.Text="设置已保存，正在重连"; }
         return true;
     }
+
+    static string CredentialPath {
+        get {
+            string local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            return Path.Combine(local,"CapsWriterOffline","credentials.json");
+        }
+    }
+    static void LoadStoredToken() {
+        tokenField.Password="";
+        try {
+            string file=CredentialPath;
+            if (!File.Exists(file)) return;
+            var json=File.ReadAllText(file,Encoding.UTF8);
+            if (!json.Contains("\"protected\": \"dpapi\"") && !json.Contains("\"protected\":\"dpapi\"")) return;
+            var m=Regex.Match(json,"\"blob\"\\s*:\\s*\"([A-Za-z0-9+/=]+)\"");
+            if (!m.Success) return;
+            var blob=Convert.FromBase64String(m.Groups[1].Value);
+            var plain=System.Security.Cryptography.ProtectedData.Unprotect(blob,null,
+                System.Security.Cryptography.DataProtectionScope.CurrentUser);
+            var inner=Encoding.UTF8.GetString(plain);
+            var t=Regex.Match(inner,"\"server_token\"\\s*:\\s*\"([^\"]*)\"");
+            if (t.Success && t.Groups[1].Value.Length>0)
+                tokenField.Tag=TokenSavedMarker;  // 有已存令牌
+        } catch (Exception) { tokenField.Tag=null; }
+        UpdateServerModeButtons();
+    }
+    static void SaveStoredToken(string token) {
+        var payload="{\"server_token\":\""+token.Replace("\\","\\\\").Replace("\"","\\\"")+"\"}";
+        var blob=System.Security.Cryptography.ProtectedData.Protect(Encoding.UTF8.GetBytes(payload),null,
+            System.Security.Cryptography.DataProtectionScope.CurrentUser);
+        string json="{\n  \"protected\": \"dpapi\",\n  \"blob\": \""+Convert.ToBase64String(blob)+"\"\n}";
+        string file=CredentialPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(file));
+        File.WriteAllText(file,json,new UTF8Encoding(false));
+        tokenField.Tag=TokenSavedMarker;
+    }
+    static readonly object TokenSavedMarker=new object();
 
     static Process FindBackend() {
         foreach(var p in Process.GetProcessesByName("start_client")) {
@@ -595,6 +748,7 @@ internal static partial class Desktop {
     static void ProcessLine(string line) {
         if(line.Contains("WebSocket 建立成功")) connected=true;
         if(line.Contains("WebSocket") && (line.Contains("断开")||line.Contains("关闭")||line.Contains("失败"))) connected=false;
+        if(line.Contains("HTTP 401")||line.Contains("令牌")) connected=false;
         if(line.Contains("触发：开始录音")) { recording=true; processing=false; started=DateTime.Now; lastText=""; }
         if(line.Contains("释放：完成录音")) { recording=false; processing=!liveMode; }
         int interim=line.IndexOf("实时识别片段:",StringComparison.Ordinal);
@@ -610,7 +764,8 @@ internal static partial class Desktop {
         }
         if(line.Contains("实时输入已暂停") || line.Contains("最终文字未输入")) AppendLog(line);
         else if(line.Contains("触发：开始录音")||line.Contains("释放：完成录音")||interim>=0||final>=0||
-            line.Contains("WebSocket 建立成功")||line.Contains("ERROR")) AppendLog(line);
+            line.Contains("WebSocket 建立成功")||line.Contains("HTTP 401")||line.Contains("令牌")||
+            line.Contains("ERROR")) AppendLog(line);
     }
     static void AppendLog(string line) {
         logBox.AppendText(line+Environment.NewLine);
@@ -624,8 +779,8 @@ internal static partial class Desktop {
         status.Text=state;
         heroHint.Text=recording?
             (liveMode?"停顿后发送有效语音，继续说会继续输入":"结束录音后一次回写"):
-            connected?"连接到 "+host.Text+":"+port.Text+"  ·  "+ShortcutHint():
-            "正在连接 "+host.Text+":"+port.Text;
+            connected?"连接到 "+ServerDisplay()+"  ·  "+ShortcutHint():
+            "正在连接 "+ServerDisplay();
         sideStatus.Text=recording?"正在录音":connected?"服务已连接":"尚未连接";
         sideDot.Fill=B(recording?"#E76C70":connected?"#6DB890":"#A7AAAC");
         bool floatReady=alive&&connected;
@@ -638,7 +793,7 @@ internal static partial class Desktop {
             processing?"识别中":"";
         floatDetail.Text=lastText.Length>0?
             (lastText.Length>28?"…"+lastText.Substring(lastText.Length-28):lastText):
-            recording?"边说边输入当前应用":host.Text+":"+port.Text;
+            recording?"边说边输入当前应用":ServerDisplay();
         transcript.Text=lastText.Length>0?
             (lastText.Length>160?"…"+lastText.Substring(lastText.Length-160):lastText):
             "等待录音。你说的话会出现在这里。";

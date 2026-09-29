@@ -1,4 +1,5 @@
 import json
+import time
 import asyncio
 from multiprocessing import Queue
 
@@ -54,6 +55,7 @@ async def ws_send(app):
 
             # 发送消息
             await websocket.send(msg.to_json())
+            state.last_result_time = time.time()
             logger.debug(f"发送识别结果，任务ID: {result.task_id}, 文本长度: {len(result.text)}")
 
             if result.type == 'mic':

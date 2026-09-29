@@ -10,5 +10,5 @@ $refs = @(
   'WPF\WindowsBase.dll',
   'System.Xaml.dll'
 ) | ForEach-Object { '/reference:' + (Join-Path $fx $_) }
-& $csc /nologo /target:winexe /optimize+ $out $icon $refs /reference:System.Drawing.dll /reference:System.Windows.Forms.dll (Join-Path $PSScriptRoot 'CapsWriterDesktop.cs') (Join-Path $PSScriptRoot 'Visuals.cs') (Join-Path $PSScriptRoot 'Shortcuts.cs')
+& $csc /nologo /target:winexe /optimize+ $out $icon $refs /reference:System.Drawing.dll /reference:System.Security.dll /reference:System.Windows.Forms.dll (Join-Path $PSScriptRoot 'CapsWriterDesktop.cs') (Join-Path $PSScriptRoot 'Visuals.cs') (Join-Path $PSScriptRoot 'Shortcuts.cs')
 if ($LASTEXITCODE -ne 0) { throw 'C# compilation failed.' }

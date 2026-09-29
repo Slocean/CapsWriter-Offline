@@ -23,8 +23,15 @@ from core.logger import get_logger, setup_logger
 setup_logger('client', level=Config.log_level)
 logger = get_logger('client')
 
-# 门面类
-from core.client.app import CapsWriterClient
+
+def __getattr__(name):
+    # 惰性导入门面类：子模块（如 connection/）不再连带拉起
+    # numpy/sounddevice/pystray 等重型依赖
+    if name == 'CapsWriterClient':
+        from core.client.app import CapsWriterClient
+        return CapsWriterClient
+    raise AttributeError(name)
+
 
 __all__ = [
     'CapsWriterClient',
