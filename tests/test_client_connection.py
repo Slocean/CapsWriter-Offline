@@ -144,11 +144,12 @@ class CredentialStoreTests(unittest.TestCase):
 
 
 class HandshakeHeaderTests(unittest.TestCase):
-    """单密钥：握手使用 X-API-Key；旧 cw. 令牌绝不能作为 Key 发送"""
+    """单密钥：仅 wss:// 携带 X-API-Key；明文 ws:// 绝不带 Key；旧 cw. 令牌绝不能作为 Key 发送"""
 
     def setUp(self):
         self._orig = (ClientConfig.api_key, ClientConfig.credential_store,
-                      getattr(ClientConfig, 'server_token', ''))
+                      getattr(ClientConfig, 'server_token', ''),
+                      getattr(ClientConfig, 'server_url', ''))
 
     def tearDown(self):
         ClientConfig.api_key, ClientConfig.credential_store = self._orig[0], self._orig[1]
@@ -159,28 +160,39 @@ class HandshakeHeaderTests(unittest.TestCase):
                 delattr(ClientConfig, 'server_token')
             except Exception:
                 pass
+        ClientConfig.server_url = self._orig[3]
 
     def _no_store(self):
         ClientConfig.credential_store = os.path.join(os.environ.get('TEMP', '/tmp'), 'nonexistent-creds.json')
+
+    def test_wss_with_key_sends_x_api_key(self):
+        ClientConfig.api_key = 'sk-panel-1'
+        self._no_store()
+        wm = _reload_connection_module()
+        self.assertEqual(wm._handshake_headers('wss://voice.example.com'),
+                         {'X-API-Key': 'sk-panel-1'})
 
     def test_no_key_no_headers(self):
         ClientConfig.api_key = ''
         self._no_store()
         wm = _reload_connection_module()
-        self.assertEqual(wm._handshake_headers(), {})
-
-    def test_api_key_sent_as_x_api_key(self):
-        ClientConfig.api_key = 'sk-panel-1'
-        self._no_store()
-        wm = _reload_connection_module()
-        self.assertEqual(wm._handshake_headers(), {'X-API-Key': 'sk-panel-1'})
+        self.assertEqual(wm._handshake_headers('wss://voice.example.com'), {})
+        self.assertEqual(wm._handshake_headers('ws://192.168.0.104:6016'), {})
 
     def test_no_bearer_authorization_header(self):
         """不再发送旧版 Authorization: Bearer 头"""
         ClientConfig.api_key = 'sk-panel-1'
         self._no_store()
         wm = _reload_connection_module()
-        self.assertNotIn('Authorization', wm._handshake_headers())
+        self.assertNotIn('Authorization', wm._handshake_headers('wss://voice.example.com'))
+
+    def test_plaintext_ws_never_sends_key(self):
+        """明文 ws:// 绝不携带面板 Key（LAN 直连与误填的远程地址都一样）"""
+        ClientConfig.api_key = 'sk-panel-1'
+        self._no_store()
+        wm = _reload_connection_module()
+        self.assertEqual(wm._handshake_headers('ws://192.168.0.104:6016'), {})
+        self.assertEqual(wm._handshake_headers('ws://voice.example.com'), {})
 
     def test_legacy_config_token_ignored(self):
         """旧配置 server_token 中的 cw. 令牌被忽略，不产生任何鉴权头"""
@@ -188,7 +200,7 @@ class HandshakeHeaderTests(unittest.TestCase):
         ClientConfig.server_token = 'cw.legacytokenvalue'
         self._no_store()
         wm = _reload_connection_module()
-        self.assertEqual(wm._handshake_headers(), {})
+        self.assertEqual(wm._handshake_headers('wss://voice.example.com'), {})
         self.assertTrue(wm.has_legacy_credentials())
 
     def test_legacy_store_token_ignored(self):
@@ -206,7 +218,7 @@ class HandshakeHeaderTests(unittest.TestCase):
             importlib.reload(cred)
             ClientConfig.credential_store = path
             wm = _reload_connection_module()
-            self.assertEqual(wm._handshake_headers(), {})
+            self.assertEqual(wm._handshake_headers('wss://voice.example.com'), {})
             self.assertTrue(wm.has_legacy_credentials())
 
     def test_key_from_store_used_when_config_empty(self):
@@ -220,7 +232,8 @@ class HandshakeHeaderTests(unittest.TestCase):
             cred.save_api_key('sk-from-store', path)
             ClientConfig.credential_store = path
             wm = _reload_connection_module()
-            self.assertEqual(wm._handshake_headers(), {'X-API-Key': 'sk-from-store'})
+            self.assertEqual(wm._handshake_headers('wss://voice.example.com'),
+                             {'X-API-Key': 'sk-from-store'})
 
 
 if __name__ == '__main__':

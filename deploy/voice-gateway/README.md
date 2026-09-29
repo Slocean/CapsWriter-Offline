@@ -23,7 +23,16 @@
 ## 打包
 
 ```powershell
-Compress-Archive -Path deploy/voice-gateway/Dockerfile, deploy/voice-gateway/Caddyfile.template -DestinationPath voice-gateway.zip -Force
+Compress-Archive -Path deploy/voice-gateway/Dockerfile, deploy/voice-gateway/Caddyfile.template -DestinationPath deploy/voice-gateway.zip -Force
 ```
 
 注意：两条流水线上传的是同一个 zip，区别在面板流水线的「构建参数」。
+
+## 配置执行
+
+面板登记、部署与机器门配置用 `deploy/voice-setup.sh`（在服务器 WSL 运行，
+`PANEL_KEY=dpk_xxx bash voice-setup.sh`）。脚本依赖同目录的
+`voice_setup_lib.py`，两个文件一起分发。脚本已按 2026-09-29 复核修法修复
+（多网络 IP 逐个探测、机器门列表请求体、ASR 子域绑 `voice`、部署成败按
+面板收尾标记判定），并通过 `tests/test_voice_setup.py` 离线单测；带真实
+Key 的现场执行与真机录音验收仍未发生，勿据单元测试宣称远程已可用。

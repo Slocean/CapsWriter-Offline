@@ -56,12 +56,16 @@ def _config_api_key() -> str:
     return (getattr(Config, 'api_key', '') or '').strip()
 
 
-def _handshake_headers() -> dict:
+def _handshake_headers(url: str) -> dict:
     """
-    握手请求头：远程接入经部署面板「网关 → 机器门」校验 X-API-Key。
-    旧版 cw. 客户端令牌绝不能作为面板 Key 发送——检测到时忽略并提示。
-    令牌/Key 值绝不写入日志或异常。
+    握手请求头：仅 wss:// 加密连接携带部署面板 API Key（网关机器门校验）。
+
+    明文 ws://（局域网直连或误填的远程地址）绝不携带 Key，避免把面板 Key
+    发到明文链路。旧版 cw. 客户端令牌绝不能作为面板 Key 发送——检测到时
+    忽略并提示。Key 值绝不写入日志或异常。
     """
+    if not (url or '').lower().startswith('wss://'):
+        return {}
     key = _config_api_key() or load_api_key().strip()
     if not key:
         return {}
@@ -136,11 +140,15 @@ class WebSocketManager:
             console.print(f'[bold red]服务端地址配置无效，请检查“远程地址”设置[/bold red]\n')
             return False
 
-        headers = _handshake_headers()
+        headers = _handshake_headers(url)
         secure = url.lower().startswith('wss://')
         if not secure:
             console.print(f'[grey50]提示：ws:// 为明文连接，仅适合可信局域网[/grey50]')
-        if not headers and has_legacy_credentials():
+            if (getattr(Config, 'server_url', '') or '').strip():
+                # 用户显式填了远程 ws:// 地址：绝不静默带 Key 降级，明确要求 wss://
+                console.print('[yellow]远程地址使用明文 ws://，为避免泄露未携带部署面板 API Key；'
+                              '远程接入请改用 wss:// 地址[/yellow]')
+        if not headers and secure and has_legacy_credentials():
             console.print('[yellow]检测到旧版客户端令牌，远程接入需要部署面板 API Key；请重新录入[/yellow]')
 
         try:
