@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# e2e 夹具：假 docker。行为由 VOICE_E2E_SCENARIO 场景文件驱动。
+SCEN="${VOICE_E2E_SCENARIO:?}"
+case "$1" in
+  inspect)
+    # docker inspect panel --format '{{range ...}}{{println .IPAddress}}{{end}}'
+    python3 - "$SCEN" <<'PY'
+import json, sys
+scen = json.load(open(sys.argv[1], encoding='utf-8'))
+print("\n".join(scen.get("panel_ips") or []))
+PY
+    ;;
+  ps)
+    # docker ps --format '{{.Names}} {{.Status}}'
+    python3 - "$SCEN" <<'PY'
+import json, sys
+scen = json.load(open(sys.argv[1], encoding='utf-8'))
+if scen.get("containers_running"):
+    for pid in ("voice-asr-prod", "voice-admin-prod"):
+        print(f"app-{pid} Up 2 minutes")
+PY
+    ;;
+  *)
+    echo "fake docker: unsupported command: $*" >&2
+    exit 1
+    ;;
+esac

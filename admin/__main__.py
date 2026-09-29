@@ -61,8 +61,11 @@ def main(argv=None) -> int:
 
     app = AdminApp()
     server = make_server(Cfg.host, Cfg.port, app)
+    launch = app.asr._launch_command()
     print(f'CapsWriter 管理进程已启动: http://{Cfg.host}:{Cfg.port}/')
     print(f'  数据目录: {Cfg.data_dir}')
+    print(f'  ASR 工作目录: {Cfg.asr_work_dir}')
+    print(f'  ASR 启动命令: {" ".join(launch)}')
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

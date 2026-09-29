@@ -41,32 +41,51 @@ def build_server_url() -> str:
     - 否则按 addr + port 拼 ws://（兼容旧配置）。
 
     Raises:
-        ValueError: server_url 非法（协议必须是 ws/wss）
+        ValueError: server_url 非法（协议必须是 ws/wss，或携带 userinfo——
+                    凭据不能放进 URL，也不能随 URL 进入日志）
     """
     raw = (getattr(Config, 'server_url', '') or '').strip()
     if raw:
         if not raw.lower().startswith(('ws://', 'wss://')):
             raise ValueError(f"server_url 必须以 ws:// 或 wss:// 开头: {raw.split(':')[0]}://…")
+        after_scheme = raw.split('://', 1)[1]
+        if '@' in after_scheme.split('/', 1)[0].split('?', 1)[0]:
+            raise ValueError("server_url 不能携带用户信息（user:pass@），凭据请录入客户端凭据存储")
         return raw.rstrip('/')
     return f"ws://{Config.addr}:{Config.port}"
 
 
 def _config_api_key() -> str:
-    """配置文件中的部署面板 API Key（api_key 字段）"""
+    """配置文件中的 api_key 字段（P1-13：已弃用，检测到即提示迁移，绝不发送）"""
     return (getattr(Config, 'api_key', '') or '').strip()
+
+
+def _warn_legacy_config_key() -> None:
+    """配置文件里残留明文 Key：提示迁移到 DPAPI 凭据存储，不回显值"""
+    if _config_api_key():
+        logger.warning("config_client.py 中残留明文 api_key/server_token 字段（已弃用，不会发送）；"
+                       "请在桌面客户端「服务器」卡片重新录入部署面板 API Key（将以当前用户加密保存）")
+
+
+def sanitize_url_for_log(url: str) -> str:
+    """日志用 URL：去掉 query/fragment，避免任何随 URL 传递的敏感值进入日志"""
+    base = (url or '').split('#', 1)[0]
+    return base.split('?', 1)[0]
 
 
 def _handshake_headers(url: str) -> dict:
     """
     握手请求头：仅 wss:// 加密连接携带部署面板 API Key（网关机器门校验）。
 
-    明文 ws://（局域网直连或误填的远程地址）绝不携带 Key，避免把面板 Key
-    发到明文链路。旧版 cw. 客户端令牌绝不能作为面板 Key 发送——检测到时
-    忽略并提示。Key 值绝不写入日志或异常。
+    Key 只从当前 Windows 用户的 DPAPI 凭据存储读取（P1-13：配置文件中的
+    api_key 字段已弃用，检测到残留值时提示迁移且绝不发送）。明文 ws://
+    （局域网直连或误填的远程地址）绝不携带 Key。旧版 cw. 客户端令牌绝不
+    能作为面板 Key 发送——检测到时忽略并提示。Key 值绝不写入日志或异常。
     """
     if not (url or '').lower().startswith('wss://'):
         return {}
-    key = _config_api_key() or load_api_key().strip()
+    _warn_legacy_config_key()
+    key = load_api_key().strip()
     if not key:
         return {}
     if key.startswith(LEGACY_TOKEN_PREFIX):
@@ -77,11 +96,12 @@ def _handshake_headers(url: str) -> dict:
 
 
 def has_legacy_credentials() -> bool:
-    """是否存在需要用户重新录入的旧版令牌（供 UI/日志提示）"""
-    legacy_config = (getattr(Config, 'server_token', '') or '').strip()
-    return bool(_config_api_key() == '' and not load_api_key().strip()
-                and (legacy_config.startswith(LEGACY_TOKEN_PREFIX)
-                     or (legacy_config == '' and legacy_token_present())))
+    """是否存在需要用户重新录入的旧值（配置文件明文字段或旧凭据存储）"""
+    has_config_key = bool(_config_api_key())
+    if not has_config_key:
+        legacy_config = (getattr(Config, 'server_token', '') or '').strip()
+        has_config_key = bool(legacy_config)
+    return has_config_key or (not load_api_key().strip() and legacy_token_present())
 
 
 class WebSocketManager:
@@ -153,7 +173,7 @@ class WebSocketManager:
 
         try:
             if not self._connect_fail_logged:
-                logger.debug(f"正在连接服务端 {url}")
+                logger.debug(f"正在连接服务端 {sanitize_url_for_log(url)}")
 
             kwargs = dict(
                 uri=url,
@@ -174,24 +194,24 @@ class WebSocketManager:
             self.state.websocket = await websockets.connect(**kwargs)
 
             console.print(f'[bold green]已连接服务端: {url}[/bold green]\n')
-            logger.info(f"WebSocket 建立成功: {url}")
+            logger.info(f"WebSocket 建立成功: {sanitize_url_for_log(url)}")
             self._connect_fail_logged = False
             return True
 
         except (ConnectionRefusedError, TimeoutError):
             if not self._connect_fail_logged:
-                logger.debug(f"连接服务端 {url} 被拒绝或超时")
+                logger.debug(f"连接服务端 {sanitize_url_for_log(url)} 被拒绝或超时")
                 self._connect_fail_logged = True
         except websockets.exceptions.InvalidStatus as e:
             # 握手被拒绝（如网关机器门 401/403）——给出可操作的提示
             status = getattr(getattr(e, 'response', None), 'status_code', None)
             if not self._connect_fail_logged:
-                logger.error(f"连接服务端 {url} 被拒绝（HTTP {status}）：请检查部署面板 API Key 是否正确、是否已授权语音站点")
+                logger.error(f"连接服务端 {sanitize_url_for_log(url)} 被拒绝（HTTP {status}）：请检查部署面板 API Key 是否正确、是否已授权语音站点")
                 self._connect_fail_logged = True
             console.print(f'[bold red]服务端拒绝连接 (HTTP {status})：请检查部署面板 API Key[/bold red]\n')
         except Exception as e:
             if not self._connect_fail_logged:
-                logger.debug(f"连接服务端 {url} 失败: {e}")
+                logger.debug(f"连接服务端 {sanitize_url_for_log(url)} 失败: {e}")
                 self._connect_fail_logged = True
 
         return False

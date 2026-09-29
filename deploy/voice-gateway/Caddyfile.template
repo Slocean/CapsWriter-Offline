@@ -1,8 +1,16 @@
 # 极薄转发：Host 路由由面板 Caddy 完成，这里只做协议转发。
 # WebSocket Upgrade 由 Caddy reverse_proxy 自动处理；
 # flush_interval -1 关闭缓冲，音频流与识别结果即时透传。
+#
+# 复核清单 P1-09：面板机器门的 forward_auth 只做校验，不清除调用方请求头。
+# 认证通过后，这里必须在转发 Windows ASR 之前剥离 X-API-Key（面板 Key
+# 绝不到达 ASR 上游），以及机器门 copy_headers 注入的仅内部使用头
+# X-Gate-Trust / X-Gate-Key（ASR 不校验它们，留着只会扩大暴露面）。
 :__LISTEN__ {
 	reverse_proxy __UPSTREAM__ {
 		flush_interval -1
+		header_up -X-API-Key
+		header_up -X-Gate-Trust
+		header_up -X-Gate-Key
 	}
 }

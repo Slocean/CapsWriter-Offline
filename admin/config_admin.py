@@ -24,6 +24,15 @@ class AdminConfig:
     static_dir = REPO_DIR / 'admin' / 'static'
 
     # ASR 识别进程
+    # 两种部署形态（admin_settings.json 的 asr_work_dir / asr_launch_cmd 决定）：
+    #   源码运行：asr_work_dir=仓库目录，launch_cmd 留空 → [python, start_server.py]
+    #   打包版  ：asr_work_dir=实际 ASR 工作目录（如
+    #             C:\Users\<user>\Apps\CapsWriter-Offline-v2.6\runtime\CapsWriter-Offline），
+    #             asr_launch_cmd=["start_server.exe 的绝对路径"]
+    # PID 文件、控制通道令牌、日志、热词、server_settings.json 都指向
+    # asr_work_dir，保证状态、配置与日志管理作用于真实 ASR。
+    asr_work_dir = REPO_DIR
+    asr_launch_cmd: list = []
     asr_entry = REPO_DIR / 'start_server.py'
     asr_host = '127.0.0.1'
     asr_port = 6016
@@ -33,10 +42,10 @@ class AdminConfig:
     asr_stop_timeout = 30          # 优雅退出最长等待（秒）
     asr_start_timeout = 300        # 启动+模型加载最长等待（秒）
 
-    # 网页可管理的设置文件（config_server.py 启动时读取其覆盖值）
+    # 网页可管理的设置文件（config_server.py 启动时读取其覆盖值；位于 ASR 工作目录）
     settings_file = REPO_DIR / 'server_settings.json'
 
-    # 热词与日志
+    # 热词与日志（位于 ASR 工作目录）
     hotwords_path = REPO_DIR / 'hot-server.txt'
     log_file = REPO_DIR / 'logs' / 'server_latest.log'
     log_api_max_lines = 200
@@ -60,7 +69,11 @@ class AdminConfig:
 
 
 def load_overrides(path: Path | str | None = None) -> None:
-    """用 JSON 文件覆盖 AdminConfig 类属性（键不认识时忽略）"""
+    """用 JSON 文件覆盖 AdminConfig 类属性（键不认识时忽略）。
+
+    asr_work_dir 设置后会重派生 ASR 相关路径（PID/控制令牌/日志/热词/
+    server_settings.json/start_server.py），除非这些键也在覆盖文件里
+    显式给出。"""
     p = Path(path) if path else REPO_DIR / 'admin_settings.json'
     if not p.exists():
         return
@@ -70,7 +83,22 @@ def load_overrides(path: Path | str | None = None) -> None:
         return
     if not isinstance(data, dict):
         return
+    known = {k for k in dir(AdminConfig) if not k.startswith('_')}
     for key, value in data.items():
-        if key.startswith('_') or not hasattr(AdminConfig, key):
+        if key.startswith('_') or key not in known:
             continue
         setattr(AdminConfig, key, value)
+
+    work_dir = Path(AdminConfig.asr_work_dir)
+    if str(work_dir) != str(REPO_DIR):
+        derived = {
+            'asr_entry': work_dir / 'start_server.py',
+            'asr_pid_file': work_dir / 'logs' / 'server.pid',
+            'asr_control_token_path': work_dir / 'logs' / 'server_control.token',
+            'hotwords_path': work_dir / 'hot-server.txt',
+            'log_file': work_dir / 'logs' / 'server_latest.log',
+            'settings_file': work_dir / 'server_settings.json',
+        }
+        for key, value in derived.items():
+            if key not in data:
+                setattr(AdminConfig, key, value)

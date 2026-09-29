@@ -1,3 +1,9 @@
 # 指定所有 .bat 文件在提交时将 LF 转换为 CRLF
 *.bat text eol=crlf
 * text=auto eol=lf
+
+# Shell 脚本与夹具必须 LF：bash 的 case 模式与 heredoc 对 \r 敏感，
+# 服务器 WSL 侧执行也不接受 CRLF（git autocrlf 在 Windows 会写成 CRLF，须显式钉死）
+*.sh text eol=lf
+tests/e2e_bin/* text eol=lf
+deploy/voice_setup_lib.py text eol=lf

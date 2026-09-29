@@ -1,0 +1,17 @@
+{
+  "_说明": "复制为仓库根目录的 admin_settings.json 后按需修改；所有键都可省略",
+  "host": "0.0.0.0",
+  "port": 6017,
+
+  "_asr_work_dir": "实际 ASR 工作目录（打包版示例见下）。PID 文件、控制通道令牌、日志、热词与 server_settings.json 都指向该目录",
+  "asr_work_dir": "C:\\Users\\edc\\Apps\\CapsWriter-Offline-v2.6\\runtime\\CapsWriter-Offline",
+
+  "_asr_launch_cmd": "启动命令。打包版填 start_server.exe 的绝对路径；源码运行则删除本键（默认 python start_server.py）",
+  "asr_launch_cmd": ["C:\\Users\\edc\\Apps\\CapsWriter-Offline-v2.6\\runtime\\CapsWriter-Offline\\start_server.exe"],
+
+  "_admin_auth_mode": "password=自带密码登录（默认）；gateway=信任部署面板登录网关，须整站受网关保护且防火墙只放行网关来源后再切换",
+  "admin_auth_mode": "password",
+
+  "_gateway_user_headers": "gateway 模式信任的用户请求头（面板 Authelia 注入 Remote-User 等小写头）",
+  "gateway_user_headers": ["remote-user", "x-remote-user", "x-forwarded-user", "x-auth-request-user"]
+}

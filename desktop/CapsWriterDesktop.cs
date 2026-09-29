@@ -605,9 +605,16 @@ internal static partial class Desktop {
         string remoteUrl=urlField!=null?urlField.Text.Trim():"";
         if (remoteMode) {
             if (remoteUrl.Length==0 || remoteUrl.Length>300 ||
-                !Regex.IsMatch(remoteUrl,@"^wss?://[A-Za-z0-9.\-_:]+(:\d{1,5})?(/[^\s]*)?$",
+                !Regex.IsMatch(remoteUrl,@"^wss://[A-Za-z0-9.\-_:]+(:\d{1,5})?(/[^\s]*)?$",
                     RegexOptions.IgnoreCase)) {
-                MessageBox.Show("远程地址必须是完整的 ws:// 或 wss:// 地址，例如 wss://voice.example.com。");
+                MessageBox.Show("远程地址必须是完整的 wss:// 地址，例如 wss://voice.example.com。\r\n远程模式不接受明文 ws://（部署面板 Key 不能走明文链路）；局域网直连请切换到“局域网”模式。");
+                return false;
+            }
+            int schemeEnd=remoteUrl.IndexOf("://",StringComparison.OrdinalIgnoreCase)+3;
+            int slashIdx=remoteUrl.IndexOf('/',schemeEnd);
+            string authority=slashIdx<0?remoteUrl.Substring(schemeEnd):remoteUrl.Substring(schemeEnd,slashIdx-schemeEnd);
+            if (authority.IndexOf('@')>=0) {
+                MessageBox.Show("远程地址不能携带用户信息（user:pass@），部署面板 API Key 请录入客户端凭据存储。");
                 return false;
             }
         } else if (hostname.Length==0 || hostname.Length>253 || !Regex.IsMatch(hostname,@"^[a-zA-Z0-9.:-]+$") ||

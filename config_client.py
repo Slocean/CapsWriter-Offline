@@ -17,12 +17,11 @@ class ClientConfig:
     # —— 远程服务地址（单密钥接入） ——
     # 完整服务地址，支持 ws:// 与 wss://（如 wss://voice.example.com）。
     # 非空时优先生效；留空则按 addr + port 拼 ws:// 局域网地址（旧行为不变）。
+    # 远程接入必须使用 wss://：桌面客户端在远程模式拒绝保存 ws:// 地址。
     server_url = ''
-    # 部署面板 API Key（网关机器门校验 X-API-Key 头）。推荐留空并使用凭据
-    # 存储（桌面客户端以当前 Windows 用户 DPAPI 加密保存），避免 Key 进入
-    # 配置文件或便携包。旧版 `server_token` 字段已废弃，其中的 cw. 令牌
-    # 值会被忽略并提示重新录入。
-    api_key = ''
+    # 部署面板 API Key 不再保存在本配置文件：客户端只从当前 Windows 用户的
+    # DPAPI 凭据存储读取（桌面客户端「服务器」卡片录入）。历史版本曾在
+    # 此处有 server_token / api_key 字段，残留值会被忽略并提示重新录入。
     # 凭据存储文件路径；留空使用默认 %LOCALAPPDATA%\CapsWriterOffline\credentials.json
     credential_store = ''
 

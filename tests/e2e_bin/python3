@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# e2e 夹具：python3 → 转发到当前测试解释器
+exec "@PYTHON@" "$@"

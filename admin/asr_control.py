@@ -19,6 +19,7 @@ import threading
 import time
 import uuid
 from typing import Any, Dict, Optional
+from pathlib import Path
 
 from .config_admin import AdminConfig as Cfg
 from .control_client import ControlClient
@@ -88,9 +89,15 @@ class ASRControl:
             'memory_bytes': mem,
             'gpu': gpu_snapshot(),
             'control_ok': online,
+            'controllable': online,              # 旧版 ASR 无控制通道 → 网页不能启动/停止它
+            'pid_registered': verified_pid is not None,
             'port_open': _tcp_open(Cfg.asr_host, Cfg.asr_port),
+            'launch_cmd': self._launch_command(),
             'action': action,
         }
+        if state == 'stale' and not online and verified_pid is None:
+            result['hint'] = ('检测到端口有服务但无法核身（无控制通道/PID 登记，可能是旧版 ASR 或其他程序）；'
+                              '为避免拉起第二个模型，启动按钮不可用。请升级 ASR 到带控制通道的新版后重试。')
         with self._lock:
             self._last_status = result
         return result
@@ -198,22 +205,36 @@ class ASRControl:
                 pass
             self._proc = None
 
+    def _launch_command(self) -> list[str]:
+        """
+        ASR 启动命令（P0-07）：优先用配置的 asr_launch_cmd（打包版 EXE），
+        否则 [python, start_server.py]（源码运行）。
+        """
+        if Cfg.asr_launch_cmd:
+            cmd = [str(c) for c in Cfg.asr_launch_cmd]
+        else:
+            cmd = [sys.executable, str(Cfg.asr_entry)]
+        return cmd
+
     def _start_process(self, action: Dict[str, Any]) -> None:
         if self._already_running():
             raise RuntimeError('已有识别服务实例在运行（互斥锁/端口被占用），为避免双实例未启动新进程')
         self._update(action, progress='启动识别进程…')
 
-        entry = Cfg.asr_entry
-        if not entry.exists():
-            raise RuntimeError(f'找不到启动脚本: {entry}')
+        work_dir = Path(Cfg.asr_work_dir)
+        cmd = self._launch_command()
+        if not Cfg.asr_launch_cmd and not Path(Cfg.asr_entry).exists():
+            raise RuntimeError(f'找不到启动脚本: {Cfg.asr_entry}（打包版请配置 asr_launch_cmd 指向 EXE）')
+        if not work_dir.exists():
+            raise RuntimeError(f'ASR 工作目录不存在: {work_dir}（请检查 admin_settings.json 的 asr_work_dir）')
 
         log_out = open(Cfg.data_dir / 'asr_start.log', 'ab')
         flags = 0
         if sys.platform == 'win32':
             flags = subprocess.CREATE_NO_WINDOW
         self._proc = subprocess.Popen(
-            [sys.executable, str(entry)],
-            cwd=str(Cfg.repo_dir),
+            cmd,
+            cwd=str(work_dir),
             stdout=log_out,
             stderr=subprocess.STDOUT,
             creationflags=flags,

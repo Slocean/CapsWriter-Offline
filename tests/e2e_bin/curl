@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# e2e 夹具：假 curl。拦截 voice-setup.sh 的全部 HTTP 调用：
+#  - http://<panel-ip>:8000/api/*  → 场景表响应，调用记录到 VOICE_E2E_CALLLOG
+#  - http://127.0.0.1/（Caddy 回环探测）→ 按场景返回状态码
+# 真实 curl 的 -f 语义：HTTP >= 400 时退出码 22。
+SCEN="${VOICE_E2E_SCENARIO:?}"
+CALLLOG="${VOICE_E2E_CALLLOG:?}"
+
+method="GET"
+body=""
+url=""
+has_w=0
+host=""
+apikey=""
+me_probe_ip=""
+
+# 第一遍：完整扫描原始参数（不消耗）
+prev=""
+for a in "$@"; do
+  case "$prev" in
+    -X) method="$a" ;;
+    -d) body="$a" ;;
+    -w) has_w=1 ;;
+  esac
+  case "$a" in
+    http://*) [ -z "$url" ] && url="$a" ;;
+    Host:*) host="${a#Host: }" ;;
+    X-API-Key:*) apikey="${a#X-API-Key: }" ;;
+  esac
+  prev="$a"
+done
+
+record() { # method path body-json
+  printf '{"kind":"api","method":"%s","path":"%s","body":%s}\n' "$1" "$2" "$3" >> "$CALLLOG" 2>/dev/null || true
+}
+
+valid_ip=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("valid_ip",""))' "$SCEN")
+me_status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("me_status",200))' "$SCEN")
+
+# ---- Caddy 回环探测 ----
+case "$url" in
+  http://127.0.0.1/*|http://127.0.0.1/*)
+    python3 - "$SCEN" "$host" "$apikey" <<'PY'
+import json, sys
+scen = json.load(open(sys.argv[1], encoding='utf-8'))
+host = sys.argv[2]
+apikey = sys.argv[3]
+caddy = scen.get("caddy") or {}
+voice, admin = "", ""
+for p in scen.get("pipelines") or []:
+    if p["id"] == "voice-asr-prod":
+        voice = p["domain"]
+    elif p["id"] == "voice-admin-prod":
+        admin = p["domain"]
+if host == admin:
+    print(caddy.get("admin_noauth", 302))
+elif host == voice and host:
+    if not apikey:
+        print(caddy.get("voice_nokey", 401))
+    elif scen.get("deploy_result") != "success" or not scen.get("containers_running"):
+        print(caddy.get("voice_withkey_pre", 502))
+    else:
+        print(caddy.get("voice_withkey", 426))
+else:
+    print(404)
+PY
+    exit 0
+    ;;
+esac
+
+[ -n "$url" ] || { echo "fake curl: no url" >&2; exit 2; }
+
+# ---- 面板 API ----
+hostport="${url#http://}"
+hostport="${hostport%%/*}"
+host="${hostport%%:*}"
+rest="${url#*${hostport}}"
+path="/${rest#/}"
+path="${path%%\?*}"
+
+if [ "$path" = "/api/me" ]; then
+  if [ "$host" != "$valid_ip" ] || [ "$me_status" != "200" ]; then
+    exit 7
+  fi
+  printf '{"kind":"api","method":"GET","path":"/api/me","body":null}\n' >> "$CALLLOG"
+  echo '{"ok": true}'
+  exit 0
+fi
+
+if [ "$host" != "$valid_ip" ]; then
+  exit 7
+fi
+
+body_json=$(printf '%s' "$body" | python3 -c 'import sys, json
+try:
+    print(json.dumps(json.load(sys.stdin), ensure_ascii=False))
+except Exception:
+    print("null")')
+printf '{"kind":"api","method":"%s","path":"%s","body":%s}\n' "$method" "$path" "$body_json" >> "$CALLLOG"
+
+python3 - "$SCEN" "$method" "$path" "$body" "$has_w" <<'PY'
+import json, os, sys, pathlib
+
+scen_path, method, path, body, has_w = sys.argv[1:6]
+scen = json.load(open(scen_path, encoding='utf-8'))
+has_w = has_w == "1"
+tmp = pathlib.Path(os.environ.get('VOICE_E2E_STATE', '.'))
+tmp.mkdir(parents=True, exist_ok=True)
+state_path = tmp / 'panel-state.json'
+try:
+    state = json.loads(state_path.read_text(encoding='utf-8'))
+except Exception:
+    state = {}
+
+def save_state():
+    state_path.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
+
+def pipelines_now():
+    """scenario 流水线 + POST /api/pipelines 的状态覆盖"""
+    pipes = {p['id']: dict(p) for p in (scen.get('pipelines') or [])}
+    for pid, p in (state.get('pipelines') or {}).items():
+        pipes[pid] = p
+    return [pipes[k] for k in sorted(pipes)]
+
+def gate_now():
+    gate = dict(scen.get('gate') or {'enabled': False, 'domains': [], 'exempt': {}})
+    gate['domains'] = list(gate.get('domains') or [])
+    for d in (state.get('gate_domains') or []):
+        if d not in gate['domains']:
+            gate['domains'].append(d)
+    return gate
+
+def respond(status, obj, warnings_key=None):
+    if isinstance(obj, dict) and warnings_key:
+        w = scen.get(warnings_key) or []
+        if w:
+            obj = dict(obj); obj["warnings"] = w
+    print(json.dumps(obj, ensure_ascii=False))
+    sys.exit(0 if status < 400 else 22)
+
+if method == "POST" and path == "/api/pipelines":
+    try:
+        body_json = json.loads(body) if body else {}
+    except Exception:
+        print("BLOCKED: bad json", file=sys.stderr); sys.exit(22)
+    pid = f'{body_json.get("slug")}-{body_json.get("env", "prod")}'
+    entry = {
+        "id": pid, "name": body_json.get("name", pid),
+        "slug": body_json.get("slug"), "env": body_json.get("env", "prod"),
+        "type": body_json.get("type", "api"), "enabled": True,
+        "note": body_json.get("note", ""),
+        "domain": ".".join([body_json["domains"][0]["sub"], body_json["domains"][0]["root"]]),
+        "domains": [".".join([d["sub"], d["root"]]) for d in body_json.get("domains", [])],
+        "latest": "20260929-160000",
+        "apikey_gate": body_json.get("apikey_gate") or {"enabled": False, "paths": []},
+    }
+    state.setdefault('pipelines', {})[pid] = entry
+    save_state()
+    respond(200, {"ok": True, "id": pid, "renamed_from": None, "migrated": [],
+                  "warnings": []}, "pipeline_warnings")
+
+if method == "POST" and path == "/api/gate":
+    try:
+        body_json = json.loads(body) if body else {}
+    except Exception:
+        print("BLOCKED: bad json", file=sys.stderr); sys.exit(22)
+    state['gate_domains'] = list(body_json.get('domains') or [])
+    save_state()
+    respond(200, {"ok": True, "warnings": []}, "gate_warnings")
+
+if method == "POST" and path.endswith("/upload"):
+    respond(200, {"ok": True, "version": "20260929-160000"})
+
+if method == "POST" and path.endswith("/deploy"):
+    respond(200, {"ok": True, "job": "job-1"})
+
+if method == "GET" and path.startswith("/api/pipelines"):
+    respond(200, pipelines_now())
+
+if method == "GET" and path == "/api/gate":
+    respond(200, gate_now())
+
+if method == "GET" and path.startswith("/api/logs/"):
+    counter = tmp / 'polls'
+    n = int(counter.read_text()) if counter.exists() else 0
+    counter.write_text(str(n + 1))
+    result = scen.get("deploy_result") or "success"
+    if result == "timeout":
+        print(json.dumps({"text": "正在构建… 第 %d 次轮询" % n, "size": 10, "done": False}))
+        sys.exit(0)
+    if result == "failed":
+        done = n >= 2
+        text = "构建中…\n" if not done else "!!!!! 失败：镜像构建失败\n"
+        print(json.dumps({"text": text, "size": len(text), "done": done}))
+        sys.exit(0)
+    done = n >= 2
+    text = "构建中…\n" if not done else "===== deploy 成功 =====\n"
+    print(json.dumps({"text": text, "size": len(text), "done": done}))
+    sys.exit(0)
+
+print(json.dumps({"ok": False, "error": "not found"}))
+sys.exit(22)
+PY

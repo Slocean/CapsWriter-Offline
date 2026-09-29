@@ -191,9 +191,19 @@
     $('asrStateText').textContent = label;
 
     var d = asr.detail || {};
-    $('asrStateDetail').textContent = state === 'online'
-      ? (d.worker_alive === false ? '识别子进程未运行' : '控制通道正常，端口 ' + d.port)
-      : (state === 'stopped' ? '识别进程未运行' : '控制通道不可达，按 PID/端口监控');
+    var detailLine;
+    if (asr.hint) {
+      detailLine = asr.hint;
+    } else if (state === 'online') {
+      detailLine = d.worker_alive === false ? '识别子进程未运行' : '控制通道正常，端口 ' + d.port;
+    } else if (state === 'stopped') {
+      detailLine = '识别进程未运行';
+    } else if (state === 'stale') {
+      detailLine = '控制通道不可达，仅按 PID/端口监控';
+    } else {
+      detailLine = '—';
+    }
+    $('asrStateDetail').textContent = detailLine;
     $('mModel').textContent = d.model_type || '—';
     $('mConns').textContent = state === 'online' ? String(d.connections) : '—';
     $('mUptime').textContent = state === 'online' ? fmtUptime(d.uptime_s) : '—';
@@ -206,9 +216,12 @@
 
     setBadge(state === 'online' ? (busy ? '识别中' : '在线') : label, state);
 
-    $('startBtn').disabled = !(state === 'stopped' || state === 'stale' || state === 'failed');
-    $('stopBtn').disabled = state === 'stopped';
-    $('restartBtn').disabled = state === 'stopped';
+    // 启动/停止依赖控制通道；不可控（旧版 ASR 或控制通道失效）一律禁用，
+    // 避免对运行中的旧版误报“已停止”或拉起第二个模型
+    var controllable = !!asr.controllable;
+    $('startBtn').disabled = !controllable || !(state === 'stopped' || state === 'failed');
+    $('stopBtn').disabled = !controllable || state === 'stopped';
+    $('restartBtn').disabled = !controllable || state === 'stopped';
   }
 
   // ---------- 动作 ----------
