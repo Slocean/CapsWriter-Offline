@@ -1,0 +1,8 @@
+# 极薄转发：Host 路由由面板 Caddy 完成，这里只做协议转发。
+# WebSocket Upgrade 由 Caddy reverse_proxy 自动处理；
+# flush_interval -1 关闭缓冲，音频流与识别结果即时透传。
+:__LISTEN__ {
+	reverse_proxy __UPSTREAM__ {
+		flush_interval -1
+	}
+}
