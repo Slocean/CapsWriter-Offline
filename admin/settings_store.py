@@ -31,13 +31,6 @@ SETTINGS_SCHEMA: Dict[str, Dict[str, Any]] = {
         'choices': ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
         'restart': False,
     },
-    'auth_mode': {
-        'label': '鉴权模式',
-        'type': 'enum',
-        'choices': ['lan_legacy', 'required'],
-        'restart': False,
-        'help': 'required=所有客户端必须持令牌连接；lan_legacy=可信局域网直连免令牌（公网路径仍强制令牌）',
-    },
     'aligner_idle_timeout': {
         'label': '对齐引擎空闲释放（秒）',
         'type': 'int',

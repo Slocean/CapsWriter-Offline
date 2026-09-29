@@ -20,7 +20,7 @@ from ..state import console
 from .. import logger
 import asyncio
 
-from .credentials import load_token
+from .credentials import load_api_key, legacy_token_present, LEGACY_TOKEN_PREFIX
 
 
 if TYPE_CHECKING:
@@ -51,14 +51,33 @@ def build_server_url() -> str:
     return f"ws://{Config.addr}:{Config.port}"
 
 
+def _config_api_key() -> str:
+    """配置文件中的部署面板 API Key（api_key 字段）"""
+    return (getattr(Config, 'api_key', '') or '').strip()
+
+
 def _handshake_headers() -> dict:
-    """握手鉴权头；令牌值绝不写入日志或异常"""
-    token = (getattr(Config, 'server_token', '') or '').strip()
-    if not token:
-        token = load_token().strip()
-    if not token:
+    """
+    握手请求头：远程接入经部署面板「网关 → 机器门」校验 X-API-Key。
+    旧版 cw. 客户端令牌绝不能作为面板 Key 发送——检测到时忽略并提示。
+    令牌/Key 值绝不写入日志或异常。
+    """
+    key = _config_api_key() or load_api_key().strip()
+    if not key:
         return {}
-    return {'Authorization': f'Bearer {token}'}
+    if key.startswith(LEGACY_TOKEN_PREFIX):
+        logger.warning("检测到旧版 CapsWriter 客户端令牌（cw. 开头），已忽略；"
+                       "请在客户端重新录入部署面板 API Key")
+        return {}
+    return {'X-API-Key': key}
+
+
+def has_legacy_credentials() -> bool:
+    """是否存在需要用户重新录入的旧版令牌（供 UI/日志提示）"""
+    legacy_config = (getattr(Config, 'server_token', '') or '').strip()
+    return bool(_config_api_key() == '' and not load_api_key().strip()
+                and (legacy_config.startswith(LEGACY_TOKEN_PREFIX)
+                     or (legacy_config == '' and legacy_token_present())))
 
 
 class WebSocketManager:
@@ -121,6 +140,8 @@ class WebSocketManager:
         secure = url.lower().startswith('wss://')
         if not secure:
             console.print(f'[grey50]提示：ws:// 为明文连接，仅适合可信局域网[/grey50]')
+        if not headers and has_legacy_credentials():
+            console.print('[yellow]检测到旧版客户端令牌，远程接入需要部署面板 API Key；请重新录入[/yellow]')
 
         try:
             if not self._connect_fail_logged:
@@ -154,12 +175,12 @@ class WebSocketManager:
                 logger.debug(f"连接服务端 {url} 被拒绝或超时")
                 self._connect_fail_logged = True
         except websockets.exceptions.InvalidStatus as e:
-            # 握手被服务端拒绝（如 401 鉴权失败）——给出可操作的提示
+            # 握手被拒绝（如网关机器门 401/403）——给出可操作的提示
             status = getattr(getattr(e, 'response', None), 'status_code', None)
             if not self._connect_fail_logged:
-                logger.error(f"连接服务端 {url} 被拒绝（HTTP {status}）：请检查客户端令牌是否有效")
+                logger.error(f"连接服务端 {url} 被拒绝（HTTP {status}）：请检查部署面板 API Key 是否正确、是否已授权语音站点")
                 self._connect_fail_logged = True
-            console.print(f'[bold red]服务端拒绝连接 (HTTP {status})：请检查客户端令牌[/bold red]\n')
+            console.print(f'[bold red]服务端拒绝连接 (HTTP {status})：请检查部署面板 API Key[/bold red]\n')
         except Exception as e:
             if not self._connect_fail_logged:
                 logger.debug(f"连接服务端 {url} 失败: {e}")

@@ -22,6 +22,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog='admin', description='CapsWriter 网页管理进程')
     parser.add_argument('--host', default=None, help='监听地址（默认见 config_admin）')
     parser.add_argument('--port', type=int, default=None, help='监听端口')
+    parser.add_argument('--auth-mode', choices=['password', 'gateway'], default=None,
+                        help="password=自带密码登录（默认）；gateway=信任部署面板登录网关"
+                             "（须确认管理域名整站受网关保护，且防火墙只放行网关来源）")
     sub = parser.add_subparsers(dest='command')
     sub.add_parser('set-password', help='修改管理员密码')
     args = parser.parse_args(argv)
@@ -31,12 +34,13 @@ def main(argv=None) -> int:
         Cfg.host = args.host
     if args.port:
         Cfg.port = args.port
+    if args.auth_mode:
+        Cfg.admin_auth_mode = args.auth_mode
 
     from .sessions import AdminAuth
 
     if args.command == 'set-password':
-        auth = AdminAuth()
-        auth._ensure_password  # noqa: B018  (首次启动会生成并打印)
+        auth = AdminAuth()  # 首次运行会生成并打印初始密码
         password = getpass.getpass('新管理员密码（至少 8 位）: ')
         confirm = getpass.getpass('再次输入: ')
         if password != confirm:

@@ -1,6 +1,7 @@
 # coding: utf-8
 """
-管理端 HTTP API 全流程测试：登录、CSRF、设置、热词、令牌、日志、审计
+管理端 HTTP API 全流程测试：登录、CSRF、设置、热词、日志、审计、网关认证模式
+（单密钥改造后不再有 CapsWriter 自建客户端令牌接口）
 """
 
 import http.client
@@ -18,9 +19,11 @@ from admin.httpd import make_server  # noqa: E402
 from admin.webapp import AdminApp  # noqa: E402
 
 
-class WebappAPITests(unittest.TestCase):
+class _AdminServerBase(unittest.TestCase):
+    """共享：临时目录配置 + 线程内 HTTP 服务器 + 请求助手"""
+
     @classmethod
-    def setUpClass(cls):
+    def _configure(cls):
         cls._tmp = tempfile.TemporaryDirectory()
         tmp = pathlib.Path(cls._tmp.name)
         Cfg.data_dir = tmp / 'admin-data'
@@ -32,11 +35,10 @@ class WebappAPITests(unittest.TestCase):
         Cfg.log_file = tmp / 'server.log'
         Cfg.asr_pid_file = tmp / 'server.pid'
         Cfg.asr_control_token_path = tmp / 'control.token'
-        Cfg.repo_dir = tmp  # 令牌存储放在临时目录
+        Cfg.repo_dir = tmp
 
-        app = AdminApp()
-        app.auth.set_password('test-password-1')
-        cls.app = app
+    @classmethod
+    def _start(cls, app):
         cls.server = make_server('127.0.0.1', 0, app)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(
@@ -65,17 +67,32 @@ class WebappAPITests(unittest.TestCase):
             data = {'_raw': raw[:200].decode('utf-8', 'replace')}
         return resp.status, data, resp
 
+    def _cookie_dict(self, resp):
+        cookies = {}
+        for c in resp.msg.get_all('Set-Cookie') or []:
+            k, v = c.split(';', 1)[0].split('=', 1)
+            cookies[k] = v
+        return cookies
+
+
+class WebappAPITests(_AdminServerBase):
+    """password 模式（默认）"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._configure()
+        Cfg.admin_auth_mode = 'password'
+        app = AdminApp()
+        app.auth.set_password('test-password-1')
+        cls.app = app
+        cls._start(app)
+
     def setUp(self):
         # 每个用例独立登录
         status, data, resp = self._req('POST', '/api/v1/login', {'password': 'test-password-1'})
         self.assertEqual(status, 200)
-        cookies = {}
-        for c in resp.msg.get_all('Set-Cookie'):
-            k, v = c.split(';', 1)[0].split('=', 1)
-            cookies[k] = v
-        self.cookies = cookies
+        self.cookies = self._cookie_dict(resp)
         self.csrf = data['csrf']
-        self.auth = {'Cookie': f"{self.cookies['cw_admin_session']}"}
 
     def _h(self, csrf=True):
         headers = {'Cookie': '; '.join(f'{k}={v}' for k, v in self.cookies.items())}
@@ -109,6 +126,20 @@ class WebappAPITests(unittest.TestCase):
         status, _, _ = self._req('POST', '/api/v1/login', {'password': 'nope'})
         self.assertEqual(status, 401)
 
+    def test_bootstrap_reports_password_mode(self):
+        status, data, _ = self._req('GET', '/api/v1/bootstrap')
+        self.assertEqual(status, 200)
+        self.assertEqual(data['mode'], 'password')
+        self.assertFalse(data['authenticated'])
+
+    def test_no_client_token_endpoints(self):
+        """单密钥改造后：CapsWriter 自建令牌接口必须消失"""
+        headers = self._h()
+        status, _, _ = self._req('GET', '/api/v1/client-tokens', headers=headers)
+        self.assertEqual(status, 404)
+        status, _, _ = self._req('POST', '/api/v1/client-tokens', {'name': 'x'}, headers)
+        self.assertEqual(status, 404)
+
     def test_write_requires_csrf(self):
         status, data, _ = self._req('PUT', '/api/v1/settings',
                                     {'log_level': 'INFO'}, self._h(csrf=False))
@@ -131,7 +162,7 @@ class WebappAPITests(unittest.TestCase):
         status, data, _ = self._req('GET', '/api/v1/settings', headers=self._h())
         self.assertEqual(status, 200)
         self.assertIn('model_type', data['values'])
-        self.assertIn('restart', data['schema']['model_type'])
+        self.assertNotIn('auth_mode', data['schema'])
 
         status, data, _ = self._req('PUT', '/api/v1/settings',
                                     {'log_level': 'WARNING'}, self._h())
@@ -168,48 +199,17 @@ class WebappAPITests(unittest.TestCase):
                                     {'text': '热词C\n', 'base_mtime': mtime}, self._h())
         self.assertEqual(status, 200)
 
-    # ---------- 令牌 ----------
-
-    def test_token_lifecycle(self):
-        status, data, _ = self._req('GET', '/api/v1/client-tokens', headers=self._h())
-        self.assertEqual(status, 200)
-
-        status, data, _ = self._req('POST', '/api/v1/client-tokens', {'name': '测试机'}, self._h())
-        self.assertEqual(status, 200)
-        token = data['token']
-        tid = data['id']
-        self.assertTrue(token.startswith('cw.'))
-        self.assertNotIn(tid, '')  # 占位
-
-        status, data, _ = self._req('GET', '/api/v1/client-tokens', headers=self._h())
-        names = json.dumps(data)
-        self.assertNotIn(token, names)  # 列表绝不回显明文
-        self.assertNotIn('hash', names)
-        entry = next(t for t in data['tokens'] if t['id'] == tid)
-        self.assertEqual(entry['name'], '测试机')
-        self.assertFalse(entry['revoked'])
-
-        status, data, _ = self._req('POST', f'/api/v1/client-tokens/{tid}/rotate', {}, self._h())
-        self.assertEqual(status, 200)
-        new_token = data['token']
-        self.assertNotEqual(token, new_token)
-
-        status, data, _ = self._req('DELETE', f'/api/v1/client-tokens/{tid}', None, self._h())
-        self.assertEqual(status, 200)
-
-        status, data, _ = self._req('POST', f'/api/v1/client-tokens/{tid}/rotate', {}, self._h())
-        self.assertEqual(status, 404)
-
     # ---------- 日志与审计 ----------
 
     def test_logs_endpoint(self):
-        raw = '2026-09-29 INFO hello\n2026-09-29 INFO token cw.AbCdEfGh12345678 seen\n'
+        raw = '2026-09-29 INFO hello\n2026-09-29 INFO X-API-Key: sk-real-key-123 seen\n'
         Cfg.log_file.write_text(raw, encoding='utf-8', newline='')
         status, data, _ = self._req('GET', '/api/v1/logs?cursor=0', headers=self._h())
         self.assertEqual(status, 200)
         self.assertEqual(len(data['lines']), 2)
-        self.assertIn('<token>', '\n'.join(data['lines']))
-        self.assertNotIn('cw.AbCd', '\n'.join(data['lines']))
+        joined = '\n'.join(data['lines'])
+        self.assertIn('<redacted>', joined)
+        self.assertNotIn('sk-real-key-123', joined)
         self.assertEqual(data['next_cursor'], len(raw.encode('utf-8')))
 
         # 游标增量：已读尽则无新行
@@ -231,6 +231,59 @@ class WebappAPITests(unittest.TestCase):
         status, _, _ = self._req('POST', '/api/v1/logout', {}, self._h())
         self.assertEqual(status, 200)
         status, _, _ = self._req('GET', '/api/v1/status', headers=self._h())
+        self.assertEqual(status, 401)
+
+
+class GatewayModeTests(_AdminServerBase):
+    """gateway 认证模式：信任部署面板登录网关注入的用户请求头"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._configure()
+        Cfg.admin_auth_mode = 'gateway'
+        Cfg.gateway_user_headers = ('x-remote-user',)
+        app = AdminApp()
+        cls.app = app
+        cls._start(app)
+
+    def test_bootstrap_unauthenticated_without_gateway_header(self):
+        status, data, _ = self._req('GET', '/api/v1/bootstrap')
+        self.assertEqual(status, 200)
+        self.assertEqual(data['mode'], 'gateway')
+        self.assertFalse(data['authenticated'])
+
+    def test_api_rejected_without_gateway_header(self):
+        status, _, _ = self._req('GET', '/api/v1/status')
+        self.assertEqual(status, 401)
+
+    def test_login_disabled_in_gateway_mode(self):
+        status, _, _ = self._req('POST', '/api/v1/login', {'password': 'x'})
+        self.assertEqual(status, 404)
+
+    def test_gateway_header_grants_access_and_csrf(self):
+        status, data, resp = self._req('GET', '/api/v1/bootstrap',
+                                       headers={'X-Remote-User': 'admin-user'})
+        self.assertEqual(status, 200)
+        self.assertTrue(data['authenticated'])
+        csrf = data['csrf']
+        cookies = self._cookie_dict(resp)
+        self.assertIn('cw_admin_csrf', cookies)
+
+        headers = {'Cookie': f"cw_admin_csrf={cookies['cw_admin_csrf']}",
+                   'X-Remote-User': 'admin-user',
+                   'X-CSRF-Token': csrf}
+        status, data, _ = self._req('GET', '/api/v1/status', headers=headers)
+        self.assertEqual(status, 200)
+        self.assertTrue(data['ok'])
+
+    def test_write_requires_csrf_even_via_gateway(self):
+        headers = {'X-Remote-User': 'admin-user'}
+        status, _, _ = self._req('PUT', '/api/v1/settings', {'log_level': 'INFO'}, headers)
+        self.assertEqual(status, 403)
+
+    def test_logs_require_gateway_header(self):
+        # 缺用户头的直连请求一律 401；防伪造直连由防火墙部署保证（见配置注释）
+        status, _, _ = self._req('GET', '/api/v1/logs', headers={})
         self.assertEqual(status, 401)
 
 

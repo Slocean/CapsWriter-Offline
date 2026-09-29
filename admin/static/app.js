@@ -1,7 +1,11 @@
 /* CapsWriter 管理端前端逻辑
  * - 单页、无构建依赖；全部用户数据经 textContent 写入（防 XSS）
+ * - 认证模式由 /api/v1/bootstrap 决定：
+ *     password 模式：显示密码登录表单；
+ *     gateway 模式：信任部署面板登录网关，未过网关时只显示提示（本页没有也不需要密码框）。
  * - 状态低频轮询（5s），页面隐藏/网络错误时自动暂停
  * - 写操作带 CSRF 头，并显示影响范围与结果反馈
+ * - 语音客户端接入的部署面板 API Key 与本页无关，页面不含任何密钥管理
  */
 'use strict';
 
@@ -9,6 +13,7 @@
   var $ = function (id) { return document.getElementById(id); };
 
   var csrf = '';
+  var authMode = 'password';
   var logPaused = false;
   var logCursor = 0;
   var pollTimer = null;
@@ -39,7 +44,7 @@
       body: body === undefined ? undefined : JSON.stringify(body)
     }).then(function (res) {
       if (res.status === 401 && !opts.noRedirect) {
-        showLogin();
+        showUnauthenticated();
         throw new Error('未登录或会话已过期');
       }
       return res.json().catch(function () { return {}; }).then(function (data) {
@@ -52,14 +57,6 @@
         return data;
       });
     });
-  }
-
-  function toast(el, text, isError) {
-    el.textContent = text;
-    el.classList.remove('hidden');
-    if (!isError) {
-      setTimeout(function () { el.classList.add('hidden'); }, 6000);
-    }
   }
 
   function fmtBytes(n) {
@@ -80,25 +77,33 @@
     if (m > 0) return m + ' 分 ' + s + ' 秒';
     return s + ' 秒';
   }
-  function esc(s) {
-    // 表格单元格统一走 textContent；此处仅为杜绝 innerHTML 场景
-    var d = document.createElement('div');
-    d.textContent = String(s);
-    return d.innerHTML;
-  }
 
-  // ---------- 登录 ----------
+  // ---------- 视图切换 ----------
 
-  function showLogin() {
+  function hideAllViews() {
+    $('loginView').classList.add('hidden');
+    $('gatewayView').classList.add('hidden');
     $('mainView').classList.add('hidden');
+  }
+  function showLogin() {
+    hideAllViews();
     $('loginView').classList.remove('hidden');
     stopPolling();
   }
+  function showGatewayNotice() {
+    hideAllViews();
+    $('gatewayView').classList.remove('hidden');
+    stopPolling();
+  }
   function showMain() {
-    $('loginView').classList.add('hidden');
+    hideAllViews();
     $('mainView').classList.remove('hidden');
     refreshAll();
     startPolling();
+  }
+  function showUnauthenticated() {
+    if (authMode === 'gateway') showGatewayNotice();
+    else showLogin();
   }
 
   $('loginForm').addEventListener('submit', function (e) {
@@ -121,9 +126,9 @@
   });
 
   $('logoutBtn').addEventListener('click', function () {
-    api('POST', '/api/v1/logout', {}).catch(function () {});
+    if (authMode === 'password') api('POST', '/api/v1/logout', {}).catch(function () {});
     csrf = '';
-    showLogin();
+    showUnauthenticated();
   });
 
   // ---------- 状态轮询 ----------
@@ -139,7 +144,6 @@
         if (err.status !== 401) showGlobalError('状态获取失败：' + err.message);
         setBadge('离线', 'stale');
       });
-    api('GET', '/api/v1/client-tokens').then(renderTokens).catch(function () {});
     api('GET', '/api/v1/settings').then(renderSettings).catch(function () {});
     api('GET', '/api/v1/hotwords').then(renderHotwords).catch(function () {});
     api('GET', '/api/v1/audit').then(renderAudit).catch(function () {});
@@ -256,74 +260,6 @@
     }).catch(function () {});
   }
 
-  // ---------- 令牌 ----------
-
-  function renderTokens(data) {
-    var tbody = $('tokenTable').getElementsByTagName('tbody')[0];
-    tbody.textContent = '';
-    (data.tokens || []).forEach(function (t) {
-      var tr = document.createElement('tr');
-
-      var tdName = document.createElement('td'); tdName.textContent = t.name || '—';
-      var tdCreated = document.createElement('td'); tdCreated.textContent = fmtTime(t.created_at);
-      var tdUsed = document.createElement('td'); tdUsed.textContent = fmtTime(t.last_used_at);
-      var tdRemote = document.createElement('td'); tdRemote.textContent = t.last_remote || '—';
-      tdRemote.className = 'ellipsis';
-      var tdState = document.createElement('td');
-      tdState.textContent = t.revoked ? '已吊销' : '有效';
-      tdState.className = t.revoked ? 'tagRevoked' : 'tagOk';
-
-      var tdOps = document.createElement('td');
-      if (!t.revoked) {
-        var rot = document.createElement('button');
-        rot.className = 'ghost small'; rot.textContent = '轮换';
-        rot.addEventListener('click', function () {
-          if (!window.confirm('轮换后旧令牌立即失效，该客户端需重新录入新令牌。继续？')) return;
-          api('POST', '/api/v1/client-tokens/' + t.id + '/rotate', {})
-            .then(function (res) { showNewToken(res.token); renderTokens(data); })
-            .catch(function (err) { showGlobalError('轮换失败：' + err.message); });
-        });
-        var rev = document.createElement('button');
-        rev.className = 'dangerGhost small'; rev.textContent = '吊销';
-        rev.style.marginLeft = '6px';
-        rev.addEventListener('click', function () {
-          if (!window.confirm('吊销后该客户端将立即无法连接。继续？')) return;
-          api('DELETE', '/api/v1/client-tokens/' + t.id, {})
-            .then(refreshAll)
-            .catch(function (err) { showGlobalError('吊销失败：' + err.message); });
-        });
-        tdOps.appendChild(rot); tdOps.appendChild(rev);
-      } else {
-        tdOps.textContent = '—';
-      }
-      tr.appendChild(tdName); tr.appendChild(tdCreated); tr.appendChild(tdUsed);
-      tr.appendChild(tdRemote); tr.appendChild(tdState); tr.appendChild(tdOps);
-      tbody.appendChild(tr);
-    });
-  }
-
-  $('tokenCreateForm').addEventListener('submit', function (e) {
-    e.preventDefault();
-    var name = $('tokenName').value.trim();
-    if (!name) { window.alert('请填写客户端名称'); return; }
-    api('POST', '/api/v1/client-tokens', { name: name })
-      .then(function (res) {
-        showNewToken(res.token);
-        $('tokenName').value = '';
-        api('GET', '/api/v1/client-tokens').then(renderTokens).catch(function () {});
-      })
-      .catch(function (err) { showGlobalError('创建失败：' + err.message); });
-  });
-
-  function showNewToken(token) {
-    $('tokenNewValue').textContent = token;
-    $('tokenNewResult').classList.remove('hidden');
-  }
-  $('tokenCopyBtn').addEventListener('click', function () {
-    var text = $('tokenNewValue').textContent;
-    if (navigator.clipboard) navigator.clipboard.writeText(text);
-  });
-
   // ---------- 热词 ----------
 
   function renderHotwords(data) {
@@ -366,7 +302,7 @@
       var spec = data.schema[key];
       var value = data.values[key];
       var field = document.createElement('div');
-      field.className = 'field' + (spec.type === 'bool' || spec.choices ? '' : '');
+      field.className = 'field';
       var label = document.createElement('label');
       label.className = 'small muted';
       label.textContent = spec.label;
@@ -387,8 +323,7 @@
         spec.choices.forEach(function (c) {
           var opt = document.createElement('option');
           opt.value = c;
-          opt.textContent = { qwen_asr: 'Qwen3-ASR', fun_asr_nano: 'Fun-ASR-Nano', sensevoice: 'SenseVoice', paraformer: 'Paraformer',
-            lan_legacy: '局域网兼容（推荐过渡期）', required: '全部强制令牌（迁移完成后）' }[c] || c;
+          opt.textContent = { qwen_asr: 'Qwen3-ASR', fun_asr_nano: 'Fun-ASR-Nano', sensevoice: 'SenseVoice', paraformer: 'Paraformer' }[c] || c;
           if (value === c) opt.selected = true;
           input.appendChild(opt);
         });
@@ -433,9 +368,6 @@
         $('settingsMsg').textContent = res.restart_required && res.restart_required.length
           ? '已保存。以下修改需重启识别进程生效：' + res.restart_required.join(', ')
           : '已保存，立即生效。';
-        if (values.auth_mode !== undefined) {
-          $('settingsMsg').textContent += '（鉴权模式对新的客户端连接立即生效）';
-        }
       })
       .catch(function (err) { $('settingsMsg').textContent = '保存失败：' + err.message; })
       .finally(function () { btn.disabled = false; });
@@ -480,11 +412,22 @@
   }
 
   applyTheme();
-  // 启动：探测是否已登录
-  api('GET', '/api/v1/status', undefined, { noRedirect: true })
-    .then(function () { showMain(); })
-    .catch(function () {
-      if (csrf) showMain();
-      else showLogin();
-    });
+  // 启动：向服务端询问认证模式
+  api('GET', '/api/v1/bootstrap', undefined, { noRedirect: true })
+    .then(function (data) {
+      authMode = data.mode || 'password';
+      if (authMode === 'gateway') {
+        if (data.authenticated && data.csrf) {
+          csrf = data.csrf;
+          showMain();
+        } else {
+          showGatewayNotice();
+        }
+      } else if (data.authenticated) {
+        showMain();
+      } else {
+        showLogin();
+      }
+    })
+    .catch(function () { showLogin(); });
 })();

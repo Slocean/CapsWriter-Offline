@@ -2,16 +2,24 @@
 """
 管理端 API 与页面装配
 
-鉴权边界：
-- /health 与静态页面不要求登录（页面本身无数据，数据全在 API）；
-- 其余 /api/* 要求管理员会话；写操作另要求 CSRF 头与 Origin 同源；
-- 客户端语音令牌与管理员会话完全隔离，绝不复用。
+鉴权边界（admin_auth_mode，见 config_admin.AdminConfig）：
+- 'password'（默认）：自带管理员密码登录；无需网关即可使用。
+- 'gateway'：信任部署面板人用登录网关。管理域名整站受网关保护后启用；
+  每个请求须携带网关注入的用户请求头（gateway_user_headers），且应通过
+  Windows 防火墙把本端口来源限制为网关，防止伪造头直连。
+
+两种模式下：
+- /health 与 /api/v1/bootstrap 不要求登录（bootstrap 只回报模式，
+  不泄露数据）；
+- 其余 /api/* 要求认证；写操作另要求 CSRF 头与 Origin 同源；
+- 客户端语音接入的 API Key 校验在部署面板网关完成，与本进程无关。
 """
 
 from __future__ import annotations
 
 import hmac
 import mimetypes
+import secrets
 import time
 import uuid
 from pathlib import Path
@@ -31,18 +39,11 @@ SESSION_COOKIE = 'cw_admin_session'
 CSRF_COOKIE = 'cw_admin_csrf'
 
 
-def _token_store():
-    # 惰性导入：TokenStore 与 ASR 共用同一存储文件（仓库根目录 server_tokens.json）
-    from core.server.connection.auth import TokenStore
-    if not hasattr(_token_store, '_instance'):
-        _token_store._instance = TokenStore(Cfg.repo_dir / 'server_tokens.json')
-    return _token_store._instance
-
-
 class AdminApp:
     def __init__(self):
         self.router = Router()
-        self.auth = AdminAuth()
+        self.mode = Cfg.admin_auth_mode if Cfg.admin_auth_mode in ('password', 'gateway') else 'password'
+        self.auth = AdminAuth() if self.mode == 'password' else None
         self.asr = ASRControl()
         self.started_at = time.time()
         self._register_routes()
@@ -50,13 +51,15 @@ class AdminApp:
     # ---------------- 中间层 ----------------
 
     def handle(self, request: Request, handler, needs_auth: bool, needs_csrf: bool) -> Response:
+        request.session = None
+        request.gateway_user = ''
         if needs_auth:
-            session = self._require_session(request)
+            if self.mode == 'gateway':
+                self._require_gateway(request)
+            else:
+                request.session = self._require_session(request)
             if needs_csrf:
-                self._require_csrf(request, session)
-            request.session = session
-        else:
-            request.session = None
+                self._require_csrf(request, request.session)
         try:
             return handler(request)
         except HTTPError:
@@ -71,7 +74,16 @@ class AdminApp:
             raise HTTPError(401, '未登录或会话已过期')
         return session
 
-    def _require_csrf(self, request: Request, session: dict) -> None:
+    def _require_gateway(self, request: Request) -> None:
+        """网关模式：必须携带部署面板登录网关注入的用户请求头"""
+        for header in Cfg.gateway_user_headers:
+            value = (request.headers.get(header) or '').strip()
+            if value:
+                request.gateway_user = value[:128]
+                return
+        raise HTTPError(401, '请先通过部署面板登录网关访问管理页')
+
+    def _require_csrf(self, request: Request, session: Optional[dict]) -> None:
         # 写操作：CSRF double-submit + Origin 同源校验
         origin = request.origin
         if origin:
@@ -82,21 +94,28 @@ class AdminApp:
                 raise HTTPError(403, 'Origin 校验失败')
         header = request.headers.get('x-csrf-token', '')
         cookie = request.cookies().get(CSRF_COOKIE, '')
-        if not header or not cookie or not hmac.compare_digest(header, cookie) \
-                or not hmac.compare_digest(header, session.get('csrf', '')):
+        if not header or not cookie or not hmac.compare_digest(header, cookie):
+            raise HTTPError(403, 'CSRF 校验失败')
+        if session is not None and not hmac.compare_digest(header, session.get('csrf', '')):
             raise HTTPError(403, 'CSRF 校验失败')
 
     def _set_auth_cookies(self, session_token: str, csrf: str, secure: bool):
-        flags = f'Path=/; HttpOnly; SameSite=Strict'
+        flags = 'Path=/; HttpOnly; SameSite=Strict'
         if secure:
             flags += '; Secure'
-        csrf_flags = f'Path=/; SameSite=Strict'
+        csrf_flags = 'Path=/; SameSite=Strict'
         if secure:
             csrf_flags += '; Secure'
         return [
             ('Set-Cookie', f'{SESSION_COOKIE}={session_token}; {flags}'),
             ('Set-Cookie', f'{CSRF_COOKIE}={csrf}; {csrf_flags}'),
         ]
+
+    def _set_csrf_cookie(self, csrf: str, secure: bool):
+        flags = 'Path=/; SameSite=Strict'
+        if secure:
+            flags += '; Secure'
+        return [('Set-Cookie', f'{CSRF_COOKIE}={csrf}; {flags}')]
 
     def _clear_auth_cookies(self):
         return [
@@ -109,8 +128,11 @@ class AdminApp:
     def _register_routes(self):
         r = self.router
         r.add('GET', r'/health', self.health)
-        r.add('POST', r'/api/v1/login', self.login)
-        r.add('POST', r'/api/v1/logout', self.logout, auth=True)
+        r.add('GET', r'/api/v1/bootstrap', self.bootstrap)
+
+        if self.mode == 'password':
+            r.add('POST', r'/api/v1/login', self.login)
+            r.add('POST', r'/api/v1/logout', self.logout, auth=True)
 
         r.add('GET', r'/api/v1/status', self.status, auth=True)
         r.add('GET', r'/api/v1/logs', self.logs, auth=True)
@@ -125,11 +147,6 @@ class AdminApp:
         r.add('POST', r'/api/v1/actions/(?P<kind>start|stop|restart)', self.post_action, auth=True, csrf=True)
         r.add('GET', r'/api/v1/actions/current', self.current_action, auth=True)
 
-        r.add('GET', r'/api/v1/client-tokens', self.list_tokens, auth=True)
-        r.add('POST', r'/api/v1/client-tokens', self.create_token, auth=True, csrf=True)
-        r.add('POST', r'/api/v1/client-tokens/(?P<tid>[0-9a-f]{4,32})/rotate', self.rotate_token, auth=True, csrf=True)
-        r.add('DELETE', r'/api/v1/client-tokens/(?P<tid>[0-9a-f]{4,32})', self.revoke_token, auth=True, csrf=True)
-
         r.add('GET', r'/', self.index)
         r.add('GET', r'/static/(?P<name>[A-Za-z0-9._\-]+)', self.static_file)
 
@@ -138,6 +155,25 @@ class AdminApp:
     def health(self, request: Request) -> Response:
         # 网关/存活探针：不要求 ASR 正常
         return Response.json({'ok': True, 'service': 'capswriter-admin', 'uptime_s': round(time.time() - self.started_at, 1)})
+
+    def bootstrap(self, request: Request) -> Response:
+        """前端启动探测：回报认证模式；网关模式且已过网关时签发 CSRF cookie"""
+        if self.mode == 'gateway':
+            try:
+                self._require_gateway(request)
+            except HTTPError:
+                return Response.json({'ok': True, 'mode': 'gateway', 'authenticated': False})
+            csrf = request.cookies().get(CSRF_COOKIE, '')
+            headers = []
+            if not csrf:
+                csrf = secrets.token_urlsafe(24)
+                headers = self._set_csrf_cookie(csrf, request.secure)
+            audit.record('gateway.access', request.remote_ip, detail=f'user={request.gateway_user}')
+            return Response.json({'ok': True, 'mode': 'gateway', 'authenticated': True, 'csrf': csrf},
+                                 headers=headers)
+        token = request.cookies().get(SESSION_COOKIE, '')
+        authenticated = bool(self.auth and self.auth.session(token))
+        return Response.json({'ok': True, 'mode': 'password', 'authenticated': authenticated})
 
     def login(self, request: Request) -> Response:
         ip = request.remote_ip
@@ -246,34 +282,6 @@ class AdminApp:
 
     def current_action(self, request: Request) -> Response:
         return Response.json({'ok': True, 'action': self.asr.current_action()})
-
-    # ---------------- 客户端令牌 ----------------
-
-    def list_tokens(self, request: Request) -> Response:
-        return Response.json({'ok': True, 'tokens': _token_store().summary()})
-
-    def create_token(self, request: Request) -> Response:
-        data = request.json()
-        name = str(data.get('name', '')).strip() or '未命名客户端'
-        token, entry = _token_store().create(name)
-        audit.record('token.create', request.remote_ip, detail=f'id={entry["id"]} name={name}')
-        return Response.json({'ok': True, 'id': entry['id'], 'token': token})
-
-    def rotate_token(self, request: Request) -> Response:
-        tid = request.params['tid']
-        result = _token_store().rotate(tid)
-        if not result:
-            raise HTTPError(404, '令牌不存在或已吊销')
-        token, entry = result
-        audit.record('token.rotate', request.remote_ip, detail=f'id={entry["id"]}')
-        return Response.json({'ok': True, 'id': entry['id'], 'token': token})
-
-    def revoke_token(self, request: Request) -> Response:
-        tid = request.params['tid']
-        if not _token_store().revoke(tid):
-            raise HTTPError(404, '令牌不存在或已吊销')
-        audit.record('token.revoke', request.remote_ip, detail=f'id={tid}')
-        return Response.json({'ok': True})
 
     # ---------------- 静态页面 ----------------
 

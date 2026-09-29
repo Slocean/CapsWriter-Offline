@@ -18,7 +18,8 @@ from .config_admin import AdminConfig as Cfg
 
 _REDACTIONS = [
     (re.compile(r'(?i)\bbearer\s+[A-Za-z0-9._\-]+'), 'Bearer <redacted>'),
-    (re.compile(r'\bcw\.[A-Za-z0-9_\-]{8,}'), '<token>'),
+    (re.compile(r'(?i)\bx-api-key\s*:\s*[A-Za-z0-9._\-]+'), 'X-API-Key: <redacted>'),
+    (re.compile(r'\bcw\.[A-Za-z0-9_\-]{8,}'), '<legacy-token>'),
     (re.compile(r'\bctrl\.[A-Za-z0-9_\-]{8,}'), '<control-token>'),
 ]
 

@@ -14,13 +14,15 @@ class ClientConfig:
     addr = '127.0.0.1'          # Server 地址
     port = '6016'               # Server 端口
 
-    # —— 远程服务地址（远程识别与网页管理） ——
+    # —— 远程服务地址（单密钥接入） ——
     # 完整服务地址，支持 ws:// 与 wss://（如 wss://voice.example.com）。
     # 非空时优先生效；留空则按 addr + port 拼 ws:// 局域网地址（旧行为不变）。
     server_url = ''
-    # 客户端令牌明文。推荐留空并使用凭据存储（桌面客户端会将令牌以
-    # 当前 Windows 用户 DPAPI 加密保存），避免令牌进入配置文件或便携包。
-    server_token = ''
+    # 部署面板 API Key（网关机器门校验 X-API-Key 头）。推荐留空并使用凭据
+    # 存储（桌面客户端以当前 Windows 用户 DPAPI 加密保存），避免 Key 进入
+    # 配置文件或便携包。旧版 `server_token` 字段已废弃，其中的 cw. 令牌
+    # 值会被忽略并提示重新录入。
+    api_key = ''
     # 凭据存储文件路径；留空使用默认 %LOCALAPPDATA%\CapsWriterOffline\credentials.json
     credential_store = ''
 

@@ -14,17 +14,11 @@ class ServerConfig:
     addr = '0.0.0.0'
     port = '6016'
 
-    # —— 远程访问鉴权（远程识别与网页管理） ——
-    # 'required'   : 所有连接（含局域网直连）握手时必须携带有效客户端令牌
-    # 'lan_legacy' : 可信局域网直连沿用旧行为（免令牌）；凡携带网关标记请求头
-    #                （X-Forwarded-For 等）的连接一律要求令牌，公网路径绝不匿名
-    auth_mode = 'lan_legacy'
-    tokens_path = Path() / 'server_tokens.json'   # 客户端令牌存储（只存哈希，不明文）
-    lan_trusted_networks = [                      # 视为可信局域网的来源网段
-        '127.0.0.0/8', '::1/128',
-        '192.168.0.0/16', '10.0.0.0/8', '172.16.0.0/12',
-    ]
-    gateway_markers = ('x-forwarded-for', 'x-real-ip')  # 出现任一即视为经反代/网关转发
+    # —— 接入安全（单密钥改造） ——
+    # 对外的客户端鉴权由部署面板「网关 → 机器门」完成：网关校验请求头
+    # X-API-Key 后才转发 WebSocket 握手与音频流。ASR 进程自身不再校验
+    # 客户端令牌；局域网直连是否开放由用户通过防火墙/绑定地址控制。
+    # 资源上限仍然在握手阶段强制执行，不会因移除鉴权而放宽。
 
     # —— WebSocket 资源上限 ——
     # 单条消息上限：文件转录按 60s 分段发送约 5MB（base64），留出余量；
@@ -86,7 +80,6 @@ _SETTINGS_ALLOWLIST = frozenset({
     'log_level',            # 日志级别
     'aligner_idle_timeout',
     'gpu_boost_enabled',
-    'auth_mode',            # 鉴权模式，握手时动态读取，即时生效
 })
 
 

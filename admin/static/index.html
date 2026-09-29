@@ -11,7 +11,7 @@
 <body>
 <div id="app">
 
-  <!-- 登录视图 -->
+  <!-- 登录视图（password 模式） -->
   <section id="loginView" class="card narrow hidden">
     <h1>CapsWriter 服务管理</h1>
     <p class="muted">请输入管理员密码登录。</p>
@@ -20,6 +20,13 @@
       <button type="submit" class="primary" id="loginBtn">登录</button>
     </form>
     <p id="loginError" class="error hidden"></p>
+  </section>
+
+  <!-- 网关模式提示（gateway 模式且未通过网关登录） -->
+  <section id="gatewayView" class="card narrow hidden">
+    <h1>CapsWriter 服务管理</h1>
+    <p>本管理页由部署面板的登录网关保护。</p>
+    <p class="muted">请先通过面板登录，然后<a href="/">刷新本页</a>。直接访问服务端口无法进入。</p>
   </section>
 
   <!-- 主视图 -->
@@ -73,25 +80,7 @@
       </div>
     </details>
 
-    <!-- 客户端令牌 -->
-    <details class="card">
-      <summary>客户端令牌</summary>
-      <p class="muted small">每个客户端一个独立令牌；明文只在创建时显示一次。服务端仅存哈希，可单独吊销或轮换。</p>
-      <form id="tokenCreateForm" class="inlineForm">
-        <input type="text" id="tokenName" placeholder="客户端名称（如：笔记本）" maxlength="64">
-        <button type="submit" class="primary">新建令牌</button>
-      </form>
-      <div id="tokenNewResult" class="banner ok hidden">
-        <p><strong>新令牌（仅此一次显示，请立即复制）：</strong></p>
-        <p><code id="tokenNewValue"></code> <button id="tokenCopyBtn" class="ghost small">复制</button></p>
-      </div>
-      <div class="tableWrap">
-        <table id="tokenTable">
-          <thead><tr><th>名称</th><th>创建时间</th><th>末次使用</th><th>末次来源</th><th>状态</th><th>操作</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </details>
+    <!-- 客户端令牌区已随单密钥改造移除：语音接入统一使用部署面板 API Key（网关机器门校验） -->
 
     <!-- 热词 -->
     <details class="card">

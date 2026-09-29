@@ -43,6 +43,13 @@ class AdminConfig:
     log_api_max_bytes = 64 * 1024
 
     # 管理员认证
+    # admin_auth_mode:
+    #   'password'  自带管理员密码登录（默认；无需网关即可用）
+    #   'gateway'   信任部署面板人用登录网关：管理域名整站受网关保护后启用。
+    #               网关须注入可识别的用户请求头（见 gateway_user_headers），
+    #               且 Windows 防火墙应只放行网关来源访问本端口，防止伪造头直连。
+    admin_auth_mode = 'password'
+    gateway_user_headers = ('x-remote-user', 'x-forwarded-user', 'x-auth-request-user', 'remote-user')
     password_file = REPO_DIR / 'admin' / 'data' / 'admin_password.json'
     session_ttl = 12 * 3600
     login_rate_limit = 5           # 每分钟每 IP 失败次数上限
