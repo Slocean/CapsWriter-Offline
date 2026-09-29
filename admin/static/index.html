@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'">
+<title>CapsWriter 服务管理</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- 登录视图 -->
+  <section id="loginView" class="card narrow hidden">
+    <h1>CapsWriter 服务管理</h1>
+    <p class="muted">请输入管理员密码登录。</p>
+    <form id="loginForm">
+      <input type="password" id="loginPassword" placeholder="管理员密码" autocomplete="current-password" required>
+      <button type="submit" class="primary" id="loginBtn">登录</button>
+    </form>
+    <p id="loginError" class="error hidden"></p>
+  </section>
+
+  <!-- 主视图 -->
+  <main id="mainView" class="hidden">
+    <header class="topbar">
+      <div class="brand">
+        <h1>CapsWriter 服务管理</h1>
+        <span id="connBadge" class="badge">连接中…</span>
+      </div>
+      <div class="topActions">
+        <button id="themeBtn" class="ghost" title="切换主题">☾ 深色</button>
+        <button id="logoutBtn" class="ghost">退出</button>
+      </div>
+    </header>
+
+    <!-- 状态卡片行 -->
+    <section class="statusRow">
+      <div class="card stateCard">
+        <div class="stateLine">
+          <span id="asrState" class="stateDot unknown"></span>
+          <span id="asrStateText" class="stateText">加载中…</span>
+        </div>
+        <div id="asrStateDetail" class="muted small">—</div>
+      </div>
+      <div class="card metricCard">
+        <div class="metric"><span class="muted small">模型</span><span id="mModel" class="metricValue">—</span></div>
+        <div class="metric"><span class="muted small">连接数</span><span id="mConns" class="metricValue">—</span></div>
+        <div class="metric"><span class="muted small">运行时长</span><span id="mUptime" class="metricValue">—</span></div>
+        <div class="metric"><span class="muted small">上次检查</span><span id="mCheck" class="metricValue">—</span></div>
+      </div>
+      <div class="card actionCard">
+        <button id="restartBtn" class="primary big">安全重启</button>
+        <div class="btnRow">
+          <button id="startBtn" class="ghost" disabled>启动</button>
+          <button id="stopBtn" class="dangerGhost" disabled>停止</button>
+        </div>
+        <div id="actionProgress" class="muted small hidden"></div>
+      </div>
+    </section>
+
+    <div id="globalError" class="error banner hidden"></div>
+
+    <!-- 资源 -->
+    <details class="card" open>
+      <summary>资源占用</summary>
+      <div class="metricGrid">
+        <div class="metric"><span class="muted small">进程内存</span><span id="mMemory" class="metricValue">—</span></div>
+        <div class="metric"><span class="muted small">显存</span><span id="mGpu" class="metricValue">—</span></div>
+        <div class="metric"><span class="muted small">识别忙</span><span id="mBusy" class="metricValue">—</span></div>
+        <div class="metric"><span class="muted small">版本</span><span id="mVersion" class="metricValue">—</span></div>
+      </div>
+    </details>
+
+    <!-- 客户端令牌 -->
+    <details class="card">
+      <summary>客户端令牌</summary>
+      <p class="muted small">每个客户端一个独立令牌；明文只在创建时显示一次。服务端仅存哈希，可单独吊销或轮换。</p>
+      <form id="tokenCreateForm" class="inlineForm">
+        <input type="text" id="tokenName" placeholder="客户端名称（如：笔记本）" maxlength="64">
+        <button type="submit" class="primary">新建令牌</button>
+      </form>
+      <div id="tokenNewResult" class="banner ok hidden">
+        <p><strong>新令牌（仅此一次显示，请立即复制）：</strong></p>
+        <p><code id="tokenNewValue"></code> <button id="tokenCopyBtn" class="ghost small">复制</button></p>
+      </div>
+      <div class="tableWrap">
+        <table id="tokenTable">
+          <thead><tr><th>名称</th><th>创建时间</th><th>末次使用</th><th>末次来源</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </details>
+
+    <!-- 热词 -->
+    <details class="card">
+      <summary>服务端热词（hot-server.txt）</summary>
+      <p class="muted small">每行一个热词。服务端在模型加载时读取，保存后需重启识别进程才能生效。</p>
+      <textarea id="hotwordsText" rows="8" spellcheck="false" placeholder="热词文件为空"></textarea>
+      <div class="btnRow">
+        <button id="hotwordsSave" class="primary">保存热词</button>
+        <button id="hotwordsReload" class="ghost">重新读取</button>
+      </div>
+      <p id="hotwordsMsg" class="muted small"></p>
+    </details>
+
+    <!-- 设置 -->
+    <details class="card">
+      <summary>服务设置</summary>
+      <div id="settingsForm"></div>
+      <div class="btnRow">
+        <button id="settingsSave" class="primary">保存设置</button>
+      </div>
+      <p id="settingsMsg" class="muted small"></p>
+    </details>
+
+    <!-- 日志 -->
+    <details class="card">
+      <summary>最近日志</summary>
+      <div class="btnRow">
+        <button id="logPause" class="ghost small">暂停</button>
+        <span class="muted small">每 5 秒增量刷新；敏感字段已自动脱敏</span>
+      </div>
+      <pre id="logView" class="logView">（暂无日志）</pre>
+    </details>
+
+    <!-- 审计 -->
+    <details class="card">
+      <summary>管理操作审计</summary>
+      <pre id="auditView" class="logView small">（暂无记录）</pre>
+    </details>
+
+    <footer class="muted small">
+      管理进程仅经授权访问；重启前会等待活跃识别会话结束。
+    </footer>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
