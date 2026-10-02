@@ -19,6 +19,13 @@ import sys
 
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 REPO = pathlib.Path(__file__).resolve().parents[1]
+
+# Windows runner 控制台默认 cp1252，打印中文必须显式 UTF-8
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 OWNER_REPO = "Slocean/CapsWriter-Offline"
 
 

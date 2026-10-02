@@ -26,6 +26,13 @@ import winreg
 REPO = pathlib.Path(__file__).resolve().parents[1]
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{76543D83-1B1F-483D-A5C5-AFD742D7B41F}_is1"
 
+# Windows runner 控制台默认 cp1252，打印中文必须显式 UTF-8
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
 
 def sha(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()

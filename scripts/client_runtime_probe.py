@@ -18,6 +18,13 @@ import pathlib
 import sys
 import types
 
+# Windows runner 控制台默认 cp1252，打印中文必须显式 UTF-8
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
 
 def main() -> None:
     sys.dont_write_bytecode = True  # 探针不得向被测安装目录写 __pycache__
