@@ -59,8 +59,12 @@ def ps(code: str) -> str:
 
 
 def desktop_shortcut() -> pathlib.Path:
-    desktop = ps("[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false);"
-                 "[Environment]::GetFolderPath('Desktop')")
+    # 输出走 base64：中文路径不经过控制台代码页（CI runner 是 cp1252，
+    # 直接输出中文会变成 '?'）
+    desktop = base64.b64decode(ps(
+        "[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false);"
+        "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([Environment]::GetFolderPath('Desktop')))"
+    ).strip()).decode("utf-8")
     return pathlib.Path(desktop) / "CapsWriter.lnk"
 
 
@@ -157,10 +161,12 @@ def main() -> None:
         assert probe.returncode == 0, "升级后运行时探针失败"
 
         assert shortcut.exists(), "桌面快捷方式未创建"
-        info = json.loads(ps(
+        raw = ps(
             "[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false);"
             "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('" + str(shortcut).replace("'", "''") + "');"
-            "@{target=$s.TargetPath;cwd=$s.WorkingDirectory}|ConvertTo-Json -Compress"))
+            "@{target=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s.TargetPath));"
+            "cwd=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s.WorkingDirectory))}|ConvertTo-Json -Compress")
+        info = {k: base64.b64decode(v).decode("utf-8") for k, v in json.loads(raw).items()}
         result["desktop_shortcut"] = dict(info)
         assert os.path.normcase(info.get("target") or "") == os.path.normcase(str(target / "CapsWriterDesktop.exe")) \
             and os.path.normcase(info.get("cwd") or "") == os.path.normcase(str(target)), \
