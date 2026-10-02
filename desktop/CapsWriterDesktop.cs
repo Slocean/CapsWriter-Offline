@@ -79,6 +79,7 @@ internal static partial class Desktop {
             tick = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
             tick.Tick += (s,e) => { ReadLog(); UpdateDisplay(); };
             tick.Start();
+            ScheduleUpdateAutoCheck();
             app.Run();
         } catch (Exception ex) {
             MessageBox.Show(ex.ToString(), "CapsWriter 启动失败");
@@ -345,6 +346,7 @@ internal static partial class Desktop {
         serverHint.TextWrapping=TextWrapping.Wrap;serverHint.Margin=new Thickness(0,8,0,0);
         server.Children.Add(serverHint);
         body.Children.Add(Surface(server,19));
+        body.Children.Add(UpdateSection());
 
         var appearance=new StackPanel();
         appearance.Children.Add(Text("浮窗",13,"#333538","#E6E7E6",true));
@@ -529,6 +531,7 @@ internal static partial class Desktop {
         menu.Items.Add("打开主界面",null,(s,e)=>main.Dispatcher.Invoke(()=>{main.Show();main.Activate();}));
         menu.Items.Add("显示 / 隐藏浮窗",null,(s,e)=>main.Dispatcher.Invoke(()=>showFloat.IsChecked=showFloat.IsChecked!=true));
         menu.Items.Add("开始 / 停止录音",null,(s,e)=>main.Dispatcher.Invoke(()=>ToggleRecording()));
+        menu.Items.Add("检查更新",null,(s,e)=>main.Dispatcher.Invoke(()=>{main.Show();main.Activate();CheckForUpdates(true);}));
         menu.Items.Add("退出",null,(s,e)=>main.Dispatcher.Invoke(()=>{Exit();Application.Current.Shutdown();}));
         foreach(Forms.ToolStripItem item in menu.Items) {
             item.ForeColor=System.Drawing.Color.FromArgb(239,246,255);
@@ -540,23 +543,95 @@ internal static partial class Desktop {
 
     static string ReadConfig() { return File.ReadAllText(Config,Encoding.UTF8); }
     static string Value(string source,string key,string fallback) {
-        var m=Regex.Match(source,@"(?m)^\s*"+Regex.Escape(key)+@"\s*=\s*(.+?)(?:\s*#.*)?$");
-        return m.Success ? m.Groups[1].Value.Trim().Trim('\'', '"') : fallback;
+        // 仅用于无引号的数字/布尔 token；带引号的字符串一律走 TryReadStringLiteral
+        var m=Regex.Match(source,@"(?m)^\s*"+Regex.Escape(key)+@"\s*=\s*(.+?)\s*(?:#.*)?$");
+        return m.Success ? m.Groups[1].Value.Trim() : fallback;
+    }
+    // A02：严格解析 Python 字符串字面量——注释只在字符串外识别（字符串里的
+    // # 不截断）、不用 Trim 引号集合（末尾转义单引号不被误剥）、转义按
+    // Python 语义解码。解析失败返回 false。
+    static bool TryReadStringLiteral(string source,string key,out string value) {
+        value=null;
+        if(source==null||key==null) return false;
+        var m=Regex.Match(source,@"(?m)^\s*"+Regex.Escape(key)+@"\s*=\s*");
+        if(!m.Success) return false;
+        int i=m.Index+m.Length;
+        if(i>=source.Length||(source[i]!='\''&&source[i]!='"')) return false;
+        char quote=source[i++];
+        var sb=new System.Text.StringBuilder();
+        while(i<source.Length) {
+            char c=source[i++];
+            if(c=='\\') {
+                if(i>=source.Length) return false;      // 字符串以反斜杠结尾：未闭合
+                char e=source[i++];
+                switch(e) {
+                    case 'n': sb.Append('\n'); break;
+                    case 't': sb.Append('\t'); break;
+                    case 'r': sb.Append('\r'); break;
+                    case '\\': sb.Append('\\'); break;
+                    case '\'': sb.Append('\''); break;
+                    case '"': sb.Append('"'); break;
+                    default: sb.Append('\\').Append(e); break;
+                }
+                continue;
+            }
+            if(c==quote) { value=sb.ToString(); return true; }
+            if(c=='\r'||c=='\n') return false;           // 引号未闭合就换行
+            sb.Append(c);
+        }
+        return false;                                     // 字符串未闭合
+    }
+    // A02：Python 单引号字面量序列化（与 TryReadStringLiteral 互逆）
+    static string EscapePy(string s) {
+        return s.Replace("\\","\\\\").Replace("'","\\'");
+    }
+    // A02（第二轮预审反例）：addr/port 在配置里是带引号的 Python 字符串字面量，
+    // 必须用严格解析器读取——Value() 会把引号一起返回，输入框变成
+    // '127.0.0.1'，LAN 保存的输入校验必然失败。
+    static string ReadConfigString(string source,string key,string fallback) {
+        string v;
+        return TryReadStringLiteral(source,key,out v)?v:fallback;
+    }
+    // A02：加载->编辑->保存链条的纯函数层（反射实测）。返回 LoadSettings
+    // 实际填充输入框的值；SaveSettings 的 LAN 分支用的 host/port 就来自这里。
+    static System.Collections.Generic.Dictionary<string,string> LoadConfigValues(string content) {
+        var v=new System.Collections.Generic.Dictionary<string,string>();
+        v["addr"]=ReadConfigString(content,"addr","127.0.0.1");
+        v["port"]=ReadConfigString(content,"port","6016");
+        v["server_url"]=ReadConfigString(content,"server_url","");
+        string ps;
+        v["pause_seconds"]=TryReadStringLiteralOrToken(content,"pause_seconds",out ps)?ps:"0.75";
+        // pause_segmented 优先，缺失时回退 live_output（与 LoadSettings 语义一致）
+        string seg;
+        if (!TryReadStringLiteralOrToken(content,"pause_segmented",out seg)) {
+            if (!TryReadStringLiteralOrToken(content,"live_output",out seg)) seg="True";
+        }
+        v["pause_segmented"]=seg;
+        v["context"]=ReadConfigString(content,"context","");
+        return v;
+    }
+    // token 读取：带引号字符串或裸 True/False/数字都接受（严格字面量优先）
+    static bool TryReadStringLiteralOrToken(string source,string key,out string value) {
+        if (TryReadStringLiteral(source,key,out value)) return true;
+        var m=Regex.Match(source,@"(?m)^\s*"+Regex.Escape(key)+@"\s*=\s*(.+?)\s*(?:#.*)?$");
+        if (m.Success) { value=m.Groups[1].Value.Trim(); return true; }
+        value=""; return false;
     }
     static void LoadSettings() {
         var content=ReadConfig();
-        host.Text=Value(content,"addr","127.0.0.1");
-        port.Text=Value(content,"port","6016");
-        string remoteUrl=Value(content,"server_url","");
+        var loaded=LoadConfigValues(content);
+        host.Text=loaded["addr"];
+        port.Text=loaded["port"];
+        // R09/A02：配置里是转义过的 Python 字面量，严格解析还原真实地址
+        string remoteUrl=loaded["server_url"];
         remoteMode=remoteUrl.StartsWith("ws://",StringComparison.OrdinalIgnoreCase)
             || remoteUrl.StartsWith("wss://",StringComparison.OrdinalIgnoreCase);
         urlField.Text=remoteMode?remoteUrl:"";
         LoadStoredApiKey();
-        seconds.Text=Value(content,"pause_seconds","0.75");
-        liveMode=Value(content,"pause_segmented",
-            Value(content,"live_output","True"))=="True";
+        seconds.Text=loaded["pause_seconds"];
+        liveMode=loaded["pause_segmented"]=="True";
         UpdateModeButtons();
-        contextWords.Text=Value(content,"context","");
+        contextWords.Text=loaded["context"];
         double previous;
         if (!Double.TryParse(seconds.Text, System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture, out previous) ||
@@ -597,6 +672,95 @@ internal static partial class Desktop {
         if(Regex.IsMatch(source,pattern)) return Regex.Replace(source,pattern,m=>m.Groups[1].Value+value,RegexOptions.Multiline);
         return source.Replace("class ClientConfig:", "class ClientConfig:\r\n    "+key+" = "+value);
     }
+    // A02：按目标模式生成整份配置（纯函数，反射实测）。LAN 模式的目标
+    // server_url 就是空串——不读隐藏的远程地址字段。
+    static string ApplyConfig(string content,bool remoteMode,string remoteUrl,string hostname,
+                              ushort pn,double duration,bool liveMode,string prompt) {
+        string updated=content;
+        if (remoteMode) {
+            // R09：URL 作为 Python 单引号字符串写入，反斜杠与单引号必须转义——
+            // 否则 wss://…/O'Reilly 这类合法路径会生成无法编译的 config_client.py
+            updated=Set(updated,"server_url","'"+EscapePy(remoteUrl)+"'");
+        } else {
+            updated=Set(updated,"server_url","''");
+            updated=Set(updated,"addr","'"+EscapePy(hostname)+"'");
+            updated=Set(updated,"port","'"+pn+"'");
+        }
+        updated=Set(updated,"mic_seg_duration","60");
+        updated=Set(updated,"mic_seg_overlap",liveMode?"0":"4");
+        updated=Set(updated,"pause_seconds",duration.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        updated=Set(updated,"pause_segmented",liveMode?"True":"False");
+        updated=Set(updated,"context","'"+EscapePy(prompt)+"'");
+        updated=Set(updated,"live_output",liveMode?"True":"False");
+        updated=Set(updated,"enable_tray","False");
+        updated=Set(updated,"udp_control","True");
+        updated=Set(updated,"udp_control_addr","'127.0.0.1'");
+        updated=Set(updated,"llm_enabled","False");
+        return updated;
+    }
+    // A02：写入前回读校验——用严格解析器核对每个写入键，反序列化值必须与
+    // 输入一致；不一致返回原因，null 表示整份可解析。LAN 模式的期望
+    // server_url 是空串，不与隐藏远程字段比较。
+    static string ValidateUpdate(string updated,bool remoteMode,string remoteUrl,string hostname,
+                                 ushort pn,string prompt) {
+        string su;
+        if(!TryReadStringLiteral(updated,"server_url",out su)) return "server_url 不是可解析的字符串字面量";
+        if(su!=(remoteMode?remoteUrl:"")) return "server_url 回读与目标不一致";
+        if(!remoteMode) {
+            string addr;
+            if(!TryReadStringLiteral(updated,"addr",out addr)||addr!=hostname) return "addr 回读与输入不一致";
+            string prt;
+            if(!TryReadStringLiteral(updated,"port",out prt)||prt!=pn.ToString()) return "port 回读与输入不一致";
+        }
+        string ctx;
+        if(!TryReadStringLiteral(updated,"context",out ctx)||ctx!=prompt) return "context 回读与输入不一致";
+        string udp;
+        if(!TryReadStringLiteral(updated,"udp_control_addr",out udp)||udp!="127.0.0.1") return "udp_control_addr 回读不一致";
+        return null;
+    }
+    // A03/A02：远程地址输入校验（纯函数，反射实测）——返回错误信息，null=通过
+    static string RemoteUrlValidationError(string remoteUrl) {
+        if (remoteUrl.Length==0 || remoteUrl.Length>300 ||
+            !Regex.IsMatch(remoteUrl,@"^wss://[A-Za-z0-9.\-]+(:\d{1,5})?(/[^\s]*)?$|^wss://\[[0-9A-Fa-f:.]+\](:\d{1,5})?(/[^\s]*)?$",
+                RegexOptions.IgnoreCase)) {
+            return "远程地址必须是完整的 wss:// 地址，例如 wss://voice.example.com。\r\n远程模式不接受明文 ws://（部署面板 Key 不能走明文链路）；局域网直连请切换到“局域网”模式。";
+        }
+        // R09：端口边界显式核对（\d{1,5} 会放过 99999 这类越界值）
+        Match portMatch=Regex.Match(remoteUrl,@"^(?:wss://[^/:]+|wss://\[[^\]]+\]):(\d{1,5})(?:[/?#]|$)",RegexOptions.IgnoreCase);
+        ushort pn;
+        if (portMatch.Success && (!UInt16.TryParse(portMatch.Groups[1].Value,out pn) || pn==0)) {
+            return "远程地址端口必须在 1–65535 之间。";
+        }
+        int schemeEnd=remoteUrl.IndexOf("://",StringComparison.OrdinalIgnoreCase)+3;
+        int slashIdx=remoteUrl.IndexOf('/',schemeEnd);
+        string authority=slashIdx<0?remoteUrl.Substring(schemeEnd):remoteUrl.Substring(schemeEnd,slashIdx-schemeEnd);
+        if (authority.IndexOf('@')>=0) {
+            return "远程地址不能携带用户信息（user:pass@），部署面板 API Key 请录入客户端凭据存储。";
+        }
+        // A03：fragment 与凭据查询参数一律拒绝——Key 只进本机 DPAPI 凭据存储。
+        // 查询名必须先按规范解码（%xx、考虑大小写）再匹配，%61pi_key 等
+        // 编码形式不能绕过；桌面与客户端的凭据名清单保持一致。
+        if (remoteUrl.IndexOf('#')>=0) {
+            return "远程地址不能携带 fragment（#）；部署面板 API Key 只保存在本机凭据存储。";
+        }
+        int queryIdx=remoteUrl.IndexOf('?');
+        if (queryIdx>=0) {
+            foreach (string rawPair in remoteUrl.Substring(queryIdx+1).Split('&')) {
+                if (rawPair.Length==0) continue;
+                string rawName=rawPair.Split('=')[0];
+                string decoded=rawName;
+                // 最多两轮 %xx 解码，防双重编码绕过；'+' 在查询串中是空格
+                for (int pass=0; pass<2 && decoded.IndexOf('%')>=0; pass++) {
+                    try { decoded=Uri.UnescapeDataString(decoded); } catch (ArgumentException) { break; }
+                }
+                decoded=decoded.Replace('+',' ').Trim().ToLowerInvariant();
+                if (Regex.IsMatch(decoded,@"^(?:x[_-]?api[_-]?key|api[_-]?key|apikey|access[_-]?token|server[_-]?token|secret|password|passwd|token|auth|authorization)$")) {
+                    return "远程地址查询参数不能携带凭据（"+decoded+"）；部署面板 API Key 请录入客户端凭据存储。";
+                }
+            }
+        }
+        return null;
+    }
     static bool SaveSettings(bool restart) {
         EndShortcutCapture();
         if(!ValidateShortcutSettings())return false;
@@ -604,19 +768,8 @@ internal static partial class Desktop {
         ushort pn=0; double duration;
         string remoteUrl=urlField!=null?urlField.Text.Trim():"";
         if (remoteMode) {
-            if (remoteUrl.Length==0 || remoteUrl.Length>300 ||
-                !Regex.IsMatch(remoteUrl,@"^wss://[A-Za-z0-9.\-_:]+(:\d{1,5})?(/[^\s]*)?$",
-                    RegexOptions.IgnoreCase)) {
-                MessageBox.Show("远程地址必须是完整的 wss:// 地址，例如 wss://voice.example.com。\r\n远程模式不接受明文 ws://（部署面板 Key 不能走明文链路）；局域网直连请切换到“局域网”模式。");
-                return false;
-            }
-            int schemeEnd=remoteUrl.IndexOf("://",StringComparison.OrdinalIgnoreCase)+3;
-            int slashIdx=remoteUrl.IndexOf('/',schemeEnd);
-            string authority=slashIdx<0?remoteUrl.Substring(schemeEnd):remoteUrl.Substring(schemeEnd,slashIdx-schemeEnd);
-            if (authority.IndexOf('@')>=0) {
-                MessageBox.Show("远程地址不能携带用户信息（user:pass@），部署面板 API Key 请录入客户端凭据存储。");
-                return false;
-            }
+            string urlError=RemoteUrlValidationError(remoteUrl);
+            if (urlError!=null) { MessageBox.Show(urlError); return false; }
         } else if (hostname.Length==0 || hostname.Length>253 || !Regex.IsMatch(hostname,@"^[a-zA-Z0-9.:-]+$") ||
             !UInt16.TryParse(port.Text.Trim(),out pn) || pn==0) {
             MessageBox.Show("请检查服务器地址与 1–65535 端口。"); return false;
@@ -630,25 +783,14 @@ internal static partial class Desktop {
             MessageBox.Show("识别提示词最多 120 字，不能包含换行。"); return false;
         }
         var content=ReadConfig();
-        string updated=content;
-        if (remoteMode) {
-            updated=Set(updated,"server_url","'"+remoteUrl+"'");
-        } else {
-            updated=Set(updated,"server_url","''");
-            updated=Set(updated,"addr","'"+hostname+"'");
-            updated=Set(updated,"port","'"+pn+"'");
-        }
-        updated=Set(updated,"mic_seg_duration","60");
-        updated=Set(updated,"mic_seg_overlap",liveMode?"0":"4");
-        updated=Set(updated,"pause_seconds",duration.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        updated=Set(updated,"pause_segmented",liveMode?"True":"False");
-        updated=Set(updated,"context","'"+prompt.Replace("\\","\\\\").Replace("'","\\'")+"'");
-        updated=Set(updated,"live_output",liveMode?"True":"False");
-        updated=Set(updated,"enable_tray","False");
-        updated=Set(updated,"udp_control","True");
-        updated=Set(updated,"udp_control_addr","'127.0.0.1'");
-        updated=Set(updated,"llm_enabled","False");
+        string updated=ApplyConfig(content,remoteMode,remoteUrl,hostname,pn,duration,liveMode,prompt);
         updated=ReplaceShortcutBlock(updated);
+        // A02：严格回读校验，失败不写盘（保留原配置与 .bak 链路）
+        string invalid=ValidateUpdate(updated,remoteMode,remoteUrl,hostname,pn,prompt);
+        if (invalid!=null) {
+            MessageBox.Show("配置回读校验失败（"+invalid+"），已放弃写入；原配置未改动。");
+            return false;
+        }
         if (updated!=content) {
             File.Copy(Config,Config+".bak",true);
             File.WriteAllText(Config,updated,new UTF8Encoding(false));

@@ -118,6 +118,29 @@ class Logger:
         return logger
 
     @classmethod
+    def set_level(cls, name: str, level: str) -> bool:
+        """
+        运行时调整日志级别（A05）：logger 与全部 handler 同步更新——只改
+        logger.setLevel 不会影响已挂载的 TruncatingFileHandler，会出现
+        「回执成功但 DEBUG 仍不落盘」。文件 handler 跟随新级别，控制台
+        handler 维持「只打印 WARNING 及以上」的固定策略。返回是否应用成功。
+        """
+        numeric = getattr(logging, str(level).upper(), None)
+        if numeric is None:
+            return False
+        logger = cls._loggers.get(name)
+        if logger is None:
+            return False
+        console_log_level = logging.WARNING
+        logger.setLevel(min(numeric, console_log_level))
+        for handler in logger.handlers:
+            if isinstance(handler, RotatingFileHandler):
+                handler.setLevel(numeric)
+            elif isinstance(handler, logging.StreamHandler):
+                handler.setLevel(console_log_level)
+        return True
+
+    @classmethod
     def get_logger(cls, name: str):
         """
         获取已创建的日志记录器，如果不存在则创建一个默认的

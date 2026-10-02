@@ -202,3 +202,6 @@ logs/
 
 # 仓库内正式测试不忽略
 !tests/test_*.py
+
+# 发版构建生成物（版本注入）
+desktop/AppVersion.generated.cs

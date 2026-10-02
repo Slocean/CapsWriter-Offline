@@ -1,62 +1,46 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-现代化 PyInstaller 打包配置 - 仅客户端
-适配 PyInstaller 6.0+ 版本
+客户端专用 PyInstaller 规格（GitHub Actions 与本地共用）。
 
-这是为了给 Win7 打包客户端而专设的
+只分析 start_client.py 入口；core/config_client/LLM 等私有模块一律以
+源码形式由 installer/stage_payload.py 从仓库复制，本文件不做任何文件
+复制、不建 junction、不引用 dist/build 里的已有产物——保证 Actions
+干净环境可复现。
 """
 
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
-# from PyInstaller.building.build_main import Analysis, COLLECT
-from os.path import join, basename, dirname, exists
-from os import walk, makedirs
-from shutil import copyfile, rmtree
+from PyInstaller.utils.hooks import collect_all
+import os
 
-# ==================== 打包配置选项 ====================
-
-# 是否收集 CUDA provider（客户端通常不需要）
-# - True: 包含 onnxruntime_providers_cuda.dll，支持 GPU 加速（需要在用户机器安装 CUDA 和 CUDNN）
-# - False: 不包含 CUDA provider，只使用 CPU 模式（打包体积更小，兼容性更好）
-INCLUDE_CUDA_PROVIDER = False
-
-# ====================================================
-
-
-# 初始化空列表
 binaries = []
 hiddenimports = []
 datas = []
 
-# 收集 sherpa_onnx 相关文件（客户端不需要，但保持一致性）
+# sounddevice 的 PortAudio 二进制在 _sounddevice_data（含
+# portaudio-binaries/README.md——旧版全局排除反例），必须整目录随包分发。
+# 目录与 sounddevice 模块同层（0.5.x 为 site-packages 下的单模块发行）；
+# 缺失直接失败，保证安装器/便携版永远不丢这个目录。
+import sounddevice as _sounddevice  # noqa: F401
+_probe = os.path.dirname(os.path.abspath(_sounddevice.__file__))
+_sd_data = None
+for _ in range(3):
+    _candidate = os.path.join(_probe, '_sounddevice_data')
+    if os.path.isdir(_candidate):
+        _sd_data = _candidate
+        break
+    _probe = os.path.dirname(_probe)
+if not _sd_data:
+    raise SystemExit('未找到 _sounddevice_data（sounddevice 安装不完整）')
+datas.append((_sd_data, '_sounddevice_data'))
+
+# 收集 Pillow 相关文件（托盘图标）
 try:
-    sherpa_datas = collect_data_files('sherpa_onnx', include_py_files=False)
-
-    # 根据 INCLUDE_CUDA_PROVIDER 决定是否收集 CUDA provider
-    if not INCLUDE_CUDA_PROVIDER:
-        # 过滤掉 CUDA provider 文件
-        filtered_datas = []
-        for src, dest in sherpa_datas:
-            # 检查是否是 CUDA provider 相关文件
-            if 'providers_cuda' not in basename(src).lower():
-                filtered_datas.append((src, dest))
-            else:
-                print(f"[INFO] 排除 CUDA provider: {basename(src)}")
-        sherpa_datas = filtered_datas
-
-    datas += sherpa_datas
-except:
+    pillow = collect_all('PIL')
+    datas += pillow[0]
+    binaries += pillow[1]
+    hiddenimports += pillow[2]
+except Exception:
     pass
 
-# 收集 Pillow 相关文件（用于托盘图标）
-try:
-    pillow_datas = collect_data_files('PIL', include_py_files=False)
-    datas += pillow_datas
-    pillow_binaries = collect_all('PIL')
-    binaries += pillow_binaries[1]
-except:
-    pass
-
-# 隐藏导入 - 确保所有需要的模块都被包含
 hiddenimports += [
     'websockets',
     'websockets.client',
@@ -64,6 +48,7 @@ hiddenimports += [
     'rich',
     'rich.console',
     'rich.markdown',
+    'rich._unicode_data.unicode17-0-0',
     'keyboard',
     'pyclip',
     'numpy',
@@ -72,10 +57,23 @@ hiddenimports += [
     'watchdog',
     'typer',
     'srt',
-    'PIL',           # Pillow 用于托盘图标
     'PIL.Image',
-    'pystray',       # 托盘图标库
-    'rich._unicode_data.unicode17-0-0',
+    'pystray',
+    'tkhtmlview',
+    # LLM 润色链（core.client.app 顶层 import，缺一启动即崩）
+    'openai',
+    'ollama',
+    'httpx',
+    'pydantic',
+    # 客户端源码直接 import 的其余第三方（旧 payload 均含，缺则运行时崩）
+    'pynput',
+    'rapidfuzz',
+    'markdown',
+    'requests',
+    'win32gui',
+    'win32process',
+    'win32api',
+    'win32con',
 ]
 
 a_2 = Analysis(
@@ -90,11 +88,13 @@ a_2 = Analysis(
     excludes=['IPython',
               'PySide6', 'PySide2', 'PyQt5',
               'matplotlib', 'wx',
+              'funasr', 'torch',
+              'sherpa_onnx',
               ],
     noarchive=True,
 )
 
-# 客户端过滤从系统 CUDA 目录收集的 DLL（保持一致性）
+# 客户端过滤从系统 CUDA 目录收集的 DLL
 filtered_binaries = []
 for name, src, type in a_2.binaries:
     src_lower = src.lower() if isinstance(src, str) else ''
@@ -107,7 +107,6 @@ for name, src, type in a_2.binaries:
         'onnxruntime_providers_cuda.dll' in name.lower() or
         'directml.dll' in name.lower()
     )
-
     if not is_system_cuda_dll and not is_unwanted_onnx_dll:
         filtered_binaries.append((name, src, type))
     else:
@@ -115,32 +114,27 @@ for name, src, type in a_2.binaries:
         print(f"[INFO] 排除 {reason}: {name} (从 {src} 收集)")
 a_2.binaries = filtered_binaries
 
+# 私有模块不进 PYZ（作为源码随包分发）
+private_module = ['core', 'config_client', 'config_server', 'LLM', 'admin']
 
-# 排除不要打包的模块（这些将作为源文件复制）
-private_module = ['core', 'config_client', 'config_server', 'LLM', ]
+filtered = []
+for name, src, type in a_2.pure:
+    if not any(name == m or name.startswith(m + '.') for m in private_module):
+        filtered.append((name, src, type))
+a_2.pure = filtered
 
-for which in (a_2,):
-    filtered = []
-    for name, src, type in which.pure:
-        if not any(name == m or name.startswith(m + '.') for m in private_module):
-            filtered.append((name, src, type))
-    which.pure = filtered
-
-# noarchive 会将私有模块也编译成 .pyc 放进 datas，排除掉以保持源码运行
-for which in (a_2,):
-    filtered = []
-    for name, src, type in which.datas:
-        is_private = any(
-            name.startswith(m + '/') or name.startswith(m + '\\') or name in (m + '.py', m + '.pyc')
-            for m in private_module
-        )
-        if not is_private:
-            filtered.append((name, src, type))
-    which.datas = filtered
-
+# noarchive 会把私有模块编译成 .pyc 放进 datas，同样排除
+filtered = []
+for name, src, type in a_2.datas:
+    is_private = any(
+        name.startswith(m + '/') or name.startswith(m + '\\') or name in (m + '.py', m + '.pyc')
+        for m in private_module
+    )
+    if not is_private:
+        filtered.append((name, src, type))
+a_2.datas = filtered
 
 pyz_2 = PYZ(a_2.pure)
-
 
 exe_2 = EXE(
     pyz_2,
@@ -158,8 +152,7 @@ exe_2 = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['assets\\\\icon.ico'],
-    # 所有第三方依赖放入 internal 目录
+    icon=['assets\\icon.ico'],
     contents_directory='internal',
 )
 
@@ -167,68 +160,8 @@ coll = COLLECT(
     exe_2,
     a_2.binaries,
     a_2.datas,
-
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='CapsWriter-Offline-Client',
+    name='CapsWriter-Client-Raw',
 )
-
-
-# 复制额外所需的文件（只复制用户自己写的文件）
-my_files = [
-    'config_client.py',
-    'core_client.py',
-    'hot.txt',
-    'hot-server.txt',
-    'hot-rule.txt',
-    'readme.md'
-]
-my_folders = []     # 使用软链接，不再复制
-dest_root = join('dist', basename(coll.name))
-
-# 复制文件夹中的文件
-for folder in my_folders:
-    if not exists(folder):
-        continue
-    for dirpath, dirnames, filenames in walk(folder):
-        for filename in filenames:
-            src_file = join(dirpath, filename)
-            if exists(src_file):
-                my_files.append(src_file)
-
-# 执行文件复制到根目录（不是 internal）
-for file in my_files:
-    if not exists(file):
-        continue
-    # 保持相对路径结构
-    rel_path = file.replace('\\', '/') if '\\' in file else file
-    dest_file = join(dest_root, rel_path)
-    dest_folder = dirname(dest_file)
-    makedirs(dest_folder, exist_ok=True)
-    copyfile(file, dest_file)
-
-
-# 为 models 文件夹建立链接，免去复制大文件
-from platform import system
-from subprocess import run
-
-if system() == 'Windows':
-    link_folders = ['assets', 'core', 'LLM', 'docs', 'log']
-    for folder in link_folders:
-        if not exists(folder):
-            continue
-        dest_folder = join(dest_root, folder)
-        if exists(dest_folder):
-            if os.path.islink(dest_folder) or os.path.isdir(dest_folder):
-                try:
-                    rmtree(dest_folder)
-                except:
-                    # 如果是 junction，rmtree 可能会失败，尝试调用 rmdir
-                    run(['rmdir', '/s', '/q', dest_folder], shell=True)
-        # 使用管理员权限运行的命令提示符来创建目录连接符
-        cmd = ['mklink', '/j', dest_folder, folder]
-        try:
-            run(cmd, shell=True, check=True)
-        except:
-            print(f'警告：无法创建目录连接符 {dest_folder}，请手动创建或复制文件夹')

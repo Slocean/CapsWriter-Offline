@@ -1,0 +1,163 @@
+name: Release
+
+# CapsWriter 客户端发布：安装版 + 便携版单文件 + SHA256 + 机器更新清单 + 更新公告
+# 触发：
+#   - Actions 页面 Run workflow（可指定版本，须与 installer/version.txt 一致）
+#   - 推送 v* 标签（版本须与 installer/version.txt 一致）
+# 版本唯一来源：installer/version.txt；公告：installer/announcement.md
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（如 2.6.0，须与 installer/version.txt 一致）"
+        required: true
+        type: string
+      prerelease:
+        description: "标记为预发布"
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          SOURCE_VERSION=$(tr -d ' \r\n' < installer/version.txt)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RAW="${{ inputs.version }}"
+            RAW="${RAW#v}"
+            PRERELEASE="${{ inputs.prerelease }}"
+          else
+            REF="${GITHUB_REF_NAME}"
+            case "$REF" in
+              v*) RAW="${REF#v}" ;;
+              *) echo "unsupported tag: $REF" >&2; exit 1 ;;
+            esac
+            PRERELEASE="false"
+          fi
+          if [ -z "$RAW" ]; then
+            echo "version is empty" >&2
+            exit 1
+          fi
+          if [ "$RAW" != "$SOURCE_VERSION" ]; then
+            echo "输入/标签版本 $RAW 与 installer/version.txt 的 $SOURCE_VERSION 不一致（版本唯一来源）" >&2
+            exit 1
+          fi
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
+          echo "tag=v$RAW" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=$RAW tag=v$RAW prerelease=$PRERELEASE"
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install client requirements
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-client.txt
+
+      - name: Validate version and announcement
+        run: python scripts/validate_release.py
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer and portable EXE
+        shell: pwsh
+        run: |
+          installer/build.ps1 -Version "${{ steps.ver.outputs.version }}" -ISCC "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+
+      - name: Verify portable self-extraction (no mic, Chinese+space path)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "${{ steps.ver.outputs.version }}"
+          $root = Join-Path $env:RUNNER_TEMP "caps 便携验证 用户"
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $exe = Join-Path "dist" "CapsWriter-Portable-$version.exe"
+          $process = Start-Process -FilePath $exe -ArgumentList "--verify-package", "`"$root`"" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "portable --verify-package 失败：$($process.ExitCode)" }
+          if (-not (Test-Path (Join-Path $root "verified-path.txt"))) { throw "verified-path.txt 缺失" }
+          $cache = Get-Content (Join-Path $root "verified-path.txt")
+          if (-not (Test-Path (Join-Path $cache "CapsWriterDesktop.exe")) -or -not (Test-Path (Join-Path $cache "start_client.exe"))) {
+            throw "便携缓存缺少主程序"
+          }
+          Write-Output "portable cache verified: $cache"
+
+      - name: Real install / upgrade / uninstall acceptance (no mic)
+        run: >
+          python installer/acceptance_local.py
+          --setup dist/CapsWriter-Setup-${{ steps.ver.outputs.version }}.exe
+          --payload dist/client-payload-${{ steps.ver.outputs.version }}
+          --no-network
+          --record work/acceptance-result.json
+
+      - name: Build update manifest and SHA256SUMS
+        run: >
+          python scripts/validate_release.py
+          --notes release-notes.md
+          --manifest
+          --portable dist/CapsWriter-Portable-${{ steps.ver.outputs.version }}.exe
+          --setup dist/CapsWriter-Setup-${{ steps.ver.outputs.version }}.exe
+          --out-dir dist
+
+      - name: List release files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($name in @(
+              "CapsWriter-Portable-${{ steps.ver.outputs.version }}.exe",
+              "CapsWriter-Setup-${{ steps.ver.outputs.version }}.exe",
+              "CapsWriter-Update-Manifest.json",
+              "SHA256SUMS.txt")) {
+            $path = Join-Path "dist" $name
+            if (-not (Test-Path -LiteralPath $path)) { throw "缺少发布文件: $path" }
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            Write-Output ("{0}  {1}  {2} bytes" -f $name, $hash, (Get-Item -LiteralPath $path).Length)
+          }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CapsWriter-Release-${{ steps.ver.outputs.version }}
+          path: |
+            dist/CapsWriter-Portable-*.exe
+            dist/CapsWriter-Setup-*.exe
+            dist/CapsWriter-Update-Manifest.json
+            dist/SHA256SUMS.txt
+            release-notes.md
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: CapsWriter ${{ steps.ver.outputs.version }}
+          draft: false
+          prerelease: ${{ steps.ver.outputs.prerelease == 'true' }}
+          generate_release_notes: false
+          body_path: release-notes.md
+          files: |
+            dist/CapsWriter-Portable-*.exe
+            dist/CapsWriter-Setup-*.exe
+            dist/CapsWriter-Update-Manifest.json
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
