@@ -80,6 +80,9 @@ jobs:
 
       - name: Build installer and portable EXE
         shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
         run: |
           installer/build.ps1 -Version "${{ steps.ver.outputs.version }}" -ISCC "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 
@@ -101,6 +104,9 @@ jobs:
           Write-Output "portable cache verified: $cache"
 
       - name: Real install / upgrade / uninstall acceptance (no mic)
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
         run: >
           python installer/acceptance_local.py
           --setup dist/CapsWriter-Setup-${{ steps.ver.outputs.version }}.exe

@@ -17,6 +17,12 @@ import re
 import shutil
 import sys
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
 PYCACHE = "__pycache__"
 
 # 客户端源码白名单：core 下只带这些（严禁 core/server）

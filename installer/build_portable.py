@@ -12,6 +12,12 @@ import re
 import subprocess
 import zipfile
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
 
 def sha256_file(path: pathlib.Path) -> str:
     h = hashlib.sha256()
