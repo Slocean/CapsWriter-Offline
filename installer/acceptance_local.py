@@ -161,8 +161,10 @@ def main() -> None:
             "[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false);"
             "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('" + str(shortcut).replace("'", "''") + "');"
             "@{target=$s.TargetPath;cwd=$s.WorkingDirectory}|ConvertTo-Json -Compress"))
-        assert pathlib.Path(info["target"]) == target / "CapsWriterDesktop.exe" and pathlib.Path(info["cwd"]) == target, \
-            "桌面快捷方式指向错误"
+        result["desktop_shortcut"] = dict(info)
+        assert os.path.normcase(info.get("target") or "") == os.path.normcase(str(target / "CapsWriterDesktop.exe")) \
+            and os.path.normcase(info.get("cwd") or "") == os.path.normcase(str(target)), \
+            f"桌面快捷方式指向错误: {info!r}"
         result["desktop_shortcut_target_and_working_directory_verified"] = True
 
         uninstaller = target / "unins000.exe"
