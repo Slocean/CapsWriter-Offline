@@ -10,6 +10,7 @@ import json
 import pathlib
 import re
 import subprocess
+import sys
 import zipfile
 
 if hasattr(sys.stdout, "reconfigure"):
