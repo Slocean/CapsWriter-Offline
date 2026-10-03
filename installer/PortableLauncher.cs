@@ -23,8 +23,13 @@ internal static class PortableLauncher {
         }
     }
 
-    // 清理孤儿更新残留（下载暂存目录、旧版备份、部分写入）；文件仍被占用
-    // 或更新事务进行中（helper 还持有备份）时跳过，下次正常启动再清。
+    // 清理本程序自身的更新残留。只按"自身完整外层文件名"精确识别：
+    //   <自身文件名>.update-bak / .update-partial / .update-error.txt
+    //   <自身文件名>.update-staging\（下载暂存目录，Update.cs 同名创建）
+    // 禁止任何跨程序通配（*.update-* 曾误删其他程序的哨兵文件，
+    // work/release-root-portable-cleanup.json），也不删无归属的
+    // .update-staging 整目录。更新事务进行中（helper 还持有备份/留痕）
+    // 或 --verify-package 诊断模式下一律跳过。
     static void CleanupUpdateArtifacts() {
         try {
             if (Environment.GetEnvironmentVariable("CAPSWRITER_UPDATE_IN_PROGRESS") == "1") return;
@@ -32,15 +37,16 @@ internal static class PortableLauncher {
             if (string.IsNullOrEmpty(self)) return;
             string dir = Path.GetDirectoryName(Path.GetFullPath(self));
             if (dir == null || !Directory.Exists(dir)) return;
-            string stem = Path.GetFileNameWithoutExtension(self);
-            foreach (string pattern in new[] { stem + ".update-*", "*.update-partial", "*.update-bak", "*.update-error.txt" }) {
-                foreach (string file in Directory.GetFiles(dir, pattern)) {
-                    try { File.Delete(file); } catch { }
-                }
+            string ownPrefix = Path.GetFileName(self) + ".";
+            string[] ownArtifacts = {
+                ownPrefix + "update-bak", ownPrefix + "update-partial", ownPrefix + "update-error.txt"
+            };
+            foreach (string file in ownArtifacts) {
+                string path = Path.Combine(dir, file);
+                if (File.Exists(path)) { try { File.Delete(path); } catch { } }
             }
-            foreach (string staging in Directory.GetDirectories(dir, ".update-staging")) {
-                try { Directory.Delete(staging, true); } catch { }
-            }
+            string staging = Path.Combine(dir, ownPrefix + "update-staging");
+            if (Directory.Exists(staging)) { try { Directory.Delete(staging, true); } catch { } }
         } catch { }
     }
 
@@ -213,8 +219,8 @@ internal static class PortableLauncher {
         try {
             string root = verify ? args[1] : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CapsWriterOffline", "Portable");
             string cache = Extract(root);
-            CleanupUpdateArtifacts();
             if (verify) { File.WriteAllText(Path.Combine(Path.GetFullPath(root), "verified-path.txt"), cache); return 0; }
+            CleanupUpdateArtifacts();
             string diag = DiagMode;
             if (diag == "1") return 0;          // 更新事务小样：解压成功即启动成功
             if (diag == "fail-start") return 3; // 更新事务小样：可控启动失败

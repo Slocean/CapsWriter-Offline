@@ -218,12 +218,14 @@ internal static partial class Desktop {
                     if (flavor == "portable-nohost")
                         throw new InvalidOperationException("当前运行的是便携版解压后的内部副本。请通过便携版单文件 EXE 启动程序后再更新。");
                     // 下载到正式 .exe 文件名：CreateProcess / PowerShell 只认
-                    // .exe 扩展名；暂存目录按版本隔离，先清空旧内容。
+                    // .exe 扩展名；暂存目录以"外层完整文件名"命名（与启动器
+                    // CleanupUpdateArtifacts 的清理对象精确互相对应，不与其他
+                    // 程序共享任何通配名），先清空旧内容。
                     string staging;
                     if (flavor == "portable") {
                         string outer = OuterPortableExe();
                         if (outer == null) throw new InvalidOperationException("找不到便携版外层 EXE。");
-                        staging = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outer)), ".update-staging");
+                        staging = Path.GetFullPath(outer) + ".update-staging";
                     } else {
                         staging = Path.Combine(Path.GetTempPath(), "CapsWriter-Update-" + info.Version);
                     }
