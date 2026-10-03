@@ -60,6 +60,8 @@ class ClientConfig:
 
     save_audio = True           # 是否保存录音文件
     audio_name_len = 20         # 将录音识别结果的前多少个字存储到录音文件名中，建议不要超过200
+
+    mute_output_while_recording = True  # 录音期间静音本机全部播放设备（扬声器/耳机/HDMI），结束后按设备恢复原静音状态；麦克风不受影响
     
     context = ''                # 提示词上下文，用于辅助 Fun-ASR-Nano 模型识别（例如输入人名、地名、专业术语等）
     language = 'auto'           # 识别语言：'auto', 'chinese', 'english', 'japanese' 等（各引擎支持范围不同）

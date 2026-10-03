@@ -48,6 +48,7 @@ internal static partial class Desktop {
     static Button mainRecord, floatRecord;
     static CheckBox showFloat;
     static bool connected, recording, processing, exiting, ownsBackend, remoteMode;
+    static bool mainLoaded;                    // 启动装配完成标志：快捷键自动应用仅在装配完成后生效
     static string lastText = "";
     static DateTime started;
     static long logPosition;
@@ -84,7 +85,7 @@ internal static partial class Desktop {
         } catch (Exception ex) {
             MessageBox.Show(ex.ToString(), "CapsWriter 启动失败");
         } finally {
-            Exit();
+            if(!Exit()) MessageBox.Show("客户端进程未被终止：录音停止/输出恢复未确认。请稍后手动检查客户端。");
             single.ReleaseMutex();
             single.Dispose();
         }
@@ -267,13 +268,14 @@ internal static partial class Desktop {
         var serverActions=new StackPanel { Orientation=Orientation.Horizontal };
         var restart=ThemeButton("重新连接","#F1F2F0","#303235","#4A4C4F","#D1D3D3",8);
         restart.Width=88;restart.Height=30;restart.FontSize=11;
-        restart.Click+=(s,e)=>{RestartBackend();status.Text="正在重新连接";};
+        restart.Click+=(s,e)=>{ if(RestartBackend()) status.Text="正在重新连接"; else status.Text="已取消重启：客户端恢复未确认"; };
         serverActions.Children.Add(restart);
         var test=ThemeButton("测试连接","#F1F2F0","#303235","#4A4C4F","#D1D3D3",8);
         test.Width=88;test.Height=30;test.FontSize=11;test.Margin=new Thickness(8,0,0,0);
         test.Click+=(s,e)=>{
             if(!SaveSettings(false))return;
-            RestartBackend();status.Text="正在测试连接";
+            if(RestartBackend()) status.Text="正在测试连接";
+            else status.Text="已取消重连：客户端恢复未确认";
         };
         serverActions.Children.Add(test);
         Grid.SetColumn(serverActions,1);serverHeading.Children.Add(serverActions);
@@ -532,7 +534,10 @@ internal static partial class Desktop {
         menu.Items.Add("显示 / 隐藏浮窗",null,(s,e)=>main.Dispatcher.Invoke(()=>showFloat.IsChecked=showFloat.IsChecked!=true));
         menu.Items.Add("开始 / 停止录音",null,(s,e)=>main.Dispatcher.Invoke(()=>ToggleRecording()));
         menu.Items.Add("检查更新",null,(s,e)=>main.Dispatcher.Invoke(()=>{main.Show();main.Activate();CheckForUpdates(true);}));
-        menu.Items.Add("退出",null,(s,e)=>main.Dispatcher.Invoke(()=>{Exit();Application.Current.Shutdown();}));
+        menu.Items.Add("退出",null,(s,e)=>main.Dispatcher.Invoke(()=>{
+            if(Exit()) Application.Current.Shutdown();
+            else MessageBox.Show("客户端录音停止/输出恢复未确认，已取消退出。请稍后重试。");
+        }));
         foreach(Forms.ToolStripItem item in menu.Items) {
             item.ForeColor=System.Drawing.Color.FromArgb(239,246,255);
             item.Padding=new Forms.Padding(6,5,6,5);
@@ -639,6 +644,8 @@ internal static partial class Desktop {
         showFloat.IsChecked=true;
         LoadShortcutSettings(content);
         UpdateServerModeButtons();
+        // 启动装配完成：此后快捷键 UI 的变更才会触发自动保存/应用
+        mainLoaded=true;
     }
     static void SelectServerMode(bool remote) {
         remoteMode=remote;
@@ -802,7 +809,10 @@ internal static partial class Desktop {
             apiKeyField.Clear();
             UpdateServerModeButtons();
         }
-        if(restart) { RestartBackend(); status.Text="设置已保存，正在重连"; }
+        if(restart) {
+            if(RestartBackend()) status.Text="设置已保存，正在重连";
+            else status.Text="已保存，但重连被取消：客户端恢复未确认";
+        }
         return true;
     }
 
@@ -868,13 +878,55 @@ internal static partial class Desktop {
         backend.ErrorDataReceived+=(s,e)=>{ if(e.Data!=null) main.Dispatcher.BeginInvoke(new Action(()=>AppendLog("错误: "+e.Data))); };
         backend.BeginOutputReadLine(); backend.BeginErrorReadLine();
     }
-    static void RestartBackend() {
+    static bool RestartBackend() {
+        if(!TryPrepareBackendShutdown()) {
+            MessageBox.Show("无法确认客户端已停止录音并恢复输出静音，已取消本次重启。请检查客户端进程后重试。");
+            return false;
+        }
         if(backend!=null && !backend.HasExited) {
-            if(!ownsBackend) { MessageBox.Show("已有其他程序启动的客户端。请先退出旧客户端，再重试。"); return; }
+            if(!ownsBackend) { MessageBox.Show("已有其他程序启动的客户端。请先退出旧客户端，再重试。"); return false; }
             backend.Kill(); backend.WaitForExit(5000);
         }
         backend=null; ownsBackend=false; connected=false; recording=false; processing=false;
         StartBackend();
+        return true;
+    }
+    // 桌面端终止/重启客户端前的专用握手（普通 STOP 不受影响）：
+    // - 无条件发送 PREPARE_SHUTDOWN|<nonce>（界面录音标志来自日志可能滞后）；
+    // - 客户端先落下关闭闩锁（此后任何快捷键/UDP START 都无法重新静音）、
+    //   同步结束全部录音并在完成输出静音恢复后才回执；
+    // - 仅当回执 SHUTDOWN_READY|<pid>|<nonce>、来源为 127.0.0.1:6018、
+    //   PID 与本进程记录的 backend 一致时才算确认；
+    //   SHUTDOWN_RESTORE_FAILED|... 表示客户端仍有设备恢复失败；
+    // - 未确认前绝不 Kill：超时/失败返回 false，调用方必须放弃终止。
+    static bool TryPrepareBackendShutdown() {
+        var proc=backend;
+        if(proc==null || proc.HasExited || !ownsBackend) return true;   // 没有受控进程需要终止
+        try {
+            using(var udp=new UdpClient()) {
+                udp.Client.ReceiveTimeout=300;
+                var server=new IPEndPoint(IPAddress.Loopback,6018);
+                var deadline=Environment.TickCount+5000;
+                var nonce=Environment.TickCount.ToString("X8");
+                while(Environment.TickCount<deadline) {
+                    var bytes=Encoding.ASCII.GetBytes("PREPARE_SHUTDOWN|"+nonce);
+                    try { udp.Send(bytes,bytes.Length,server); } catch {}
+                    while(Environment.TickCount<deadline) {
+                        var remote=new IPEndPoint(IPAddress.Loopback,0);
+                        byte[] data;
+                        try { data=udp.Receive(ref remote); }
+                        catch(System.Net.Sockets.SocketException) { break; }   // 接收超时→重发
+                        if(remote.Port!=6018 || !IPAddress.IsLoopback(remote.Address)) continue;
+                        var text=Encoding.ASCII.GetString(data);
+                        if(!text.StartsWith("SHUTDOWN_READY|") && !text.StartsWith("SHUTDOWN_RESTORE_FAILED|")) continue;
+                        var parts=text.Split('|');
+                        int pid; if(parts.Length<3 || !int.TryParse(parts[1],out pid) || pid!=proc.Id || parts[2]!=nonce) continue;
+                        return text.StartsWith("SHUTDOWN_READY|");
+                    }
+                }
+            }
+        } catch {}
+        return false;   // 无确认：调用方必须放弃终止
     }
     static void SendControl(string command) {
         using(var udp=new UdpClient()) {
@@ -966,13 +1018,25 @@ internal static partial class Desktop {
         mainRecord.IsEnabled=floatRecord.IsEnabled=compactRecord.IsEnabled=alive&&connected;
         tray.Text=recording?"CapsWriter · 正在录音":"CapsWriter · "+(connected?"已连接":"未连接");
     }
-    static void Exit() {
-        if(exiting) return; exiting=true;
+    // 返回 false = 无法确认客户端已完成录音停止与输出恢复，
+    // 本次退出被放弃（客户端进程保持运行，不 Kill）。
+    static bool Exit() {
+        if(exiting) return true; exiting=true;
         if(tick!=null) tick.Stop();
         if(waveTick!=null) waveTick.Stop();
+        // 记录定时器原状态：握手被取消时按原样恢复，UI 保持可用
+        bool tickWasRunning=tick!=null && tick.IsEnabled;
+        bool waveWasRunning=waveTick!=null && waveTick.IsEnabled;
+        if(!TryPrepareBackendShutdown()) {
+            exiting=false;
+            if(tickWasRunning) tick.Start();
+            if(waveWasRunning) waveTick.Start();
+            return false;
+        }
         if(tray!=null){tray.Visible=false;tray.Dispose();tray=null;}
         if(backend!=null){try{if(ownsBackend&&!backend.HasExited){backend.Kill();backend.WaitForExit(3000);}}catch{}backend.Dispose();backend=null;}
         if(floatWindow!=null) floatWindow.Close();
         if(main!=null) main.Close();
+        return true;
     }
 }

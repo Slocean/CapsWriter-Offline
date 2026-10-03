@@ -80,6 +80,14 @@ class CapsWriterClient:
         # 内存清理
         empty_current_working_set()
 
+    def reload_shortcuts(self, shortcuts=None) -> None:
+        """桌面端修改快捷键配置后的热重载入口：不重启进程、不中断音频流。
+
+        shortcuts 为 None 时按当前配置文件重读（由 ShortcutManager.restart
+        的调用方保证已完成 reload config_client）。
+        """
+        self.shortcut.restart(shortcuts)
+
     def stop(self):
         """
         统一释放所有资源（清理顺序：硬件 -> 托盘 -> WebSocket -> State）
@@ -90,6 +98,14 @@ class CapsWriterClient:
         self.udp.stop()
         self.shortcut.stop()
         self.stream.stop()
+
+        # 1.5 兜底恢复录音输出静音：正常路径已在任务完成/取消时恢复，
+        #     这里保证任何异常退出路径也不会把系统静音状态带走
+        try:
+            from .audio.output_mute import force_release_output_mute
+            force_release_output_mute('app-stop')
+        except Exception as e:
+            logger.warning(f"恢复输出静音兜底失败: {e}")
 
         # 2. 托盘资源
         self.tray.stop()

@@ -63,6 +63,11 @@ class ClientState:
     recording_start_time: float = 0.0
     audio_files: Dict[str, Path] = field(default_factory=dict)
 
+    # 桌面端 PREPARE_SHUTDOWN 闩锁：确认"已停止录音且输出静音已恢复"之后、
+    # 进程终止之前，拒绝一切新的录音开始（快捷键/UDP 全路径）。
+    # 刻意不参与 reset()：闩锁必须保持到进程消亡，避免关闭间隙重新静音。
+    shutdown_pending: bool = False
+
     # 最近一次识别结果（用于手动添加纠错记录）
     last_recognition_text: Optional[str] = None
     

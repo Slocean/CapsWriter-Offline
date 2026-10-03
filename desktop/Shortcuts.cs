@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -16,6 +17,7 @@ internal static partial class Desktop {
     static string holdKeyName="caps_lock", toggleKeyName="ctrl+alt+space";
     static readonly HashSet<string> captureModifiers=new HashSet<string>();
     static DispatcherTimer captureTimer;
+    static DispatcherTimer shortcutApplyTimer;   // 快捷键变更防抖：录入/开关后统一走一次保存+应用
     static bool capturePaused;
 
     static UIElement ShortcutSettingsPanel() {
@@ -31,6 +33,11 @@ internal static partial class Desktop {
         toggleKeyButton.ToolTip="按一次开始，再按一次结束并识别。";
         holdKeyButton.Click+=(s,e)=>BeginShortcutCapture(holdKeyButton);
         toggleKeyButton.Click+=(s,e)=>BeginShortcutCapture(toggleKeyButton);
+        // 启用开关立即持久化并应用（防抖合并连点）；启动装配期间由 mainLoaded 拦下
+        holdHotkey.Checked+=(s,e)=>ScheduleShortcutApply();
+        holdHotkey.Unchecked+=(s,e)=>ScheduleShortcutApply();
+        toggleHotkey.Checked+=(s,e)=>ScheduleShortcutApply();
+        toggleHotkey.Unchecked+=(s,e)=>ScheduleShortcutApply();
         panel.Children.Add(ShortcutRow("长按说话",holdKeyButton,holdHotkey));
         panel.Children.Add(ShortcutRow("按键开关",toggleKeyButton,toggleHotkey));
         captureHint=Text("点击按键框后按下键或组合键；Esc 取消。",11,"#77797C","#A7A9AB");
@@ -45,6 +52,11 @@ internal static partial class Desktop {
         };
         captureTimer=new DispatcherTimer { Interval=TimeSpan.FromSeconds(25) };
         captureTimer.Tick+=(s,e)=>EndShortcutCapture();
+        shortcutApplyTimer=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(500) };
+        shortcutApplyTimer.Tick+=(s,e)=>{
+            shortcutApplyTimer.Stop();
+            ApplyShortcutChanges();
+        };
         return panel;
     }
 
@@ -98,9 +110,33 @@ internal static partial class Desktop {
         return parts.Count==0?"点击浮窗录音":String.Join("，",parts.ToArray());
     }
 
+    // 字典项取值：引号值按 Python 字面量解析（保留转义），裸 token 在
+    // 行尾注释(#)、逗号、右花括号处截断——默认配置里 'enabled': True 后
+    // 面带行内注释，旧正则会把注释一起吃进导致 True 被误判为 False。
     static string EntryValue(string entry,string name,string fallback) {
-        var match=Regex.Match(entry,@"'"+Regex.Escape(name)+@"'\s*:\s*([^,}\r\n]+)");
-        return match.Success?match.Groups[1].Value.Trim().Trim('\'','"'):fallback;
+        var match=Regex.Match(entry,@"'"+Regex.Escape(name)+@"'\s*:\s*");
+        if(!match.Success)return fallback;
+        int i=match.Index+match.Length, n=entry.Length;
+        while(i<n && char.IsWhiteSpace(entry[i]))i++;
+        if(i>=n)return fallback;
+        var sb=new System.Text.StringBuilder();
+        if(entry[i]=='\''||entry[i]=='"') {
+            char quote=entry[i++];
+            while(i<n && entry[i]!=quote) {
+                if(entry[i]=='\\' && i+1<n) { sb.Append(entry[i]).Append(entry[i+1]); i+=2; }
+                else sb.Append(entry[i++]);
+            }
+            if(i>=n)return fallback;      // 引号未闭合
+            i++;
+        } else {
+            while(i<n) {
+                char c=entry[i];
+                if(c=='\r'||c=='\n'||c==','||c=='}'||c=='#')break;
+                sb.Append(c); i++;
+            }
+        }
+        string token=sb.ToString().Trim();
+        return token.Length>0?token:fallback;
     }
 
     static string ShortcutBlock(string content) {
@@ -300,5 +336,163 @@ internal static partial class Desktop {
         if(hold)holdKeyName=key;
         else toggleKeyName=key;
         EndShortcutCapture();
+        ScheduleShortcutApply();
+    }
+
+    // ===== 快捷键变更的立即保存与应用 =====
+
+    static void ScheduleShortcutApply() {
+        // 启动装配（LoadSettings 重建开关状态）期间触发的事件不是用户变更
+        if(!mainLoaded)return;
+        if(shortcutApplyTimer==null)return;
+        shortcutApplyTimer.Stop();
+        shortcutApplyTimer.Start();
+    }
+
+    // 快捷键设置立即生效：写盘（含 .bak 链路与回读校验）→ 通知运行中的
+    // 客户端热重载（RELOAD_HOTKEYS，客户端先按静音生命周期结束录音）；
+    // 热重载未确认且客户端归本程序管理时重启客户端；失败都给出明确提示。
+    static void ApplyShortcutChanges() {
+        if(!mainLoaded)return;
+        if(!ValidateShortcutSettings()) { ReloadShortcutSettingsFromDisk(); return; }
+        string content=ReadConfig();
+        string updated;
+        try { updated=ReplaceShortcutBlock(content); }
+        catch(InvalidOperationException ex) {
+            MessageBox.Show("快捷键保存失败："+ex.Message);
+            return;
+        }
+        string invalid=ValidateShortcutBlock(updated);
+        if(invalid!=null) {
+            MessageBox.Show("快捷键回读校验失败（"+invalid+"），已放弃写入；原配置未改动。");
+            ReloadShortcutSettingsFromDisk();
+            return;
+        }
+        if(updated!=content) {
+            try {
+                File.Copy(Config,Config+".bak",true);
+                File.WriteAllText(Config,updated,new UTF8Encoding(false));
+            } catch(Exception ex) {
+                MessageBox.Show("快捷键配置写入失败："+ex.Message);
+                return;
+            }
+        }
+        ApplyShortcutToBackend();
+    }
+
+    // 写盘后的回读校验：shortcuts 块里 keyboard 项的 key/hold_mode/enabled
+    // 必须与界面一致；mouse 项数量与写盘前一致（ReplaceShortcutBlock 原样
+    // 保留其内容）。返回 null 表示通过。
+    static string ValidateShortcutBlock(string updated) {
+        string block=ShortcutBlock(updated);
+        if(block.Length==0)return "shortcuts 配置块缺失";
+        bool foundHold=false,foundToggle=false; int mouse=0;
+        foreach(Match entry in Regex.Matches(block,@"\{[^{}]*\}")) {
+            string e=entry.Value;
+            if(EntryValue(e,"type","keyboard")=="mouse") { mouse++; continue; }
+            bool isHold=EntryValue(e,"hold_mode","True")=="True";
+            string key=EntryValue(e,"key","");
+            if(key.Length==0)return "key 字段缺失";
+            bool enabled=EntryValue(e,"enabled","")=="True";
+            if(isHold && !foundHold) {
+                foundHold=true;
+                if(key!=holdKeyName || enabled!=(holdHotkey.IsChecked==true))return "长按项回读不一致";
+            } else if(!isHold && !foundToggle) {
+                foundToggle=true;
+                if(key!=toggleKeyName || enabled!=(toggleHotkey.IsChecked==true))return "开关项回读不一致";
+            }
+        }
+        if(!foundHold || !foundToggle)return "keyboard 配置项缺失";
+        int mouseBefore=0;
+        string current=ReadConfig();
+        var prevMatch=Regex.Match(current,@"(?ms)^[ ]{4}shortcuts\s*=\s*\[(.*?)^[ ]{4}\]");
+        if(prevMatch.Success)
+            foreach(Match entry in Regex.Matches(prevMatch.Groups[1].Value,@"\{[^{}]*\}"))
+                if(EntryValue(entry.Value,"type","keyboard")=="mouse")mouseBefore++;
+        if(mouse!=mouseBefore)return "mouse 配置项丢失";
+        return null;
+    }
+
+    static void ReloadShortcutSettingsFromDisk() {
+        try { LoadShortcutSettings(ReadConfig()); } catch(System.IO.IOException) {}
+    }
+
+    static void ApplyShortcutToBackend() {
+        if(backend==null || backend.HasExited) {
+            status.Text="快捷键已保存（客户端未运行，下次启动生效）";
+            return;
+        }
+        if(recording) { try { SendControl("STOP"); } catch(SocketException) {} }
+        try {
+            using(var udp=new UdpClient()) {
+                udp.Client.ReceiveTimeout=2000;
+                var bytes=Encoding.ASCII.GetBytes("RELOAD_HOTKEYS");
+                udp.Send(bytes,bytes.Length,new IPEndPoint(IPAddress.Loopback,6018));
+                var deadline=Environment.TickCount+4000;
+                while(Environment.TickCount<deadline) {
+                    var remote=new IPEndPoint(IPAddress.Loopback,0);
+                    byte[] data;
+                    try { data=udp.Receive(ref remote); }
+                    catch(SocketException) { break; }
+                    var text=Encoding.ASCII.GetString(data);
+                    if(text=="RELOADED") {
+                        status.Text="快捷键已保存并生效";
+                        return;
+                    }
+                    if(text.StartsWith("RELOAD_FAILED"))break;
+                }
+            }
+        } catch(SocketException) {}
+        // 热重载未确认：客户端归本程序管理时重启使其生效（RestartBackend
+        // 内部含静音恢复握手，未确认会中止并提示）。进程重启本身不算生效
+        // 凭证——必须在新客户端日志中确认启用的快捷键完成登记才算成功。
+        if(!ownsBackend) {
+            status.Text="快捷键已保存，但客户端热重载未确认，请重试或重启客户端";
+            return;
+        }
+        long logBefore=LogLength();
+        if(!RestartBackend()) {
+            status.Text="快捷键已保存，但客户端重启未确认，请检查客户端";
+            return;
+        }
+        status.Text=ConfirmShortcutLogRegistration(logBefore)
+            ?"快捷键已保存，客户端已重启生效"
+            :"快捷键已保存，客户端已重启，但未确认新快捷键登记，请检查";
+    }
+
+    static long LogLength() {
+        try {
+            using(var f=new FileStream(Log,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))
+                return f.Length;
+        } catch(IOException) { return 0; } catch(UnauthorizedAccessException) { return 0; }
+    }
+
+    static string ReadLogRange(long from) {
+        try {
+            using(var f=new FileStream(Log,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)) {
+                if(f.Length<=from)return "";
+                f.Seek(from,SeekOrigin.Begin);
+                using(var r=new StreamReader(f,Encoding.UTF8,true,4096,true)) return r.ReadToEnd();
+            }
+        } catch(IOException) { return ""; } catch(UnauthorizedAccessException) { return ""; }
+    }
+
+    // 等待新客户端日志出现启用快捷键的登记行（"  [key] 模式…"，仅登记
+    // 已启用的绑定）；超时返回 false——重启后不得宣称快捷键已生效。
+    static bool ConfirmShortcutLogRegistration(long fromLength) {
+        var keys=new List<string>();
+        if(holdHotkey.IsChecked==true)keys.Add(holdKeyName);
+        if(toggleHotkey.IsChecked==true)keys.Add(toggleKeyName);
+        if(keys.Count==0)return true;
+        var deadline=Environment.TickCount+15000;
+        while(Environment.TickCount<deadline) {
+            string text=ReadLogRange(fromLength);
+            bool all=true;
+            foreach(var k in keys)
+                if(!Regex.IsMatch(text,Regex.Escape("["+k)+"]"+@"(?!\w)")) { all=false; break; }
+            if(all)return true;
+            System.Threading.Thread.Sleep(300);
+        }
+        return false;
     }
 }

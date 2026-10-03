@@ -176,3 +176,75 @@ footer { text-align: center; margin-top: 20px; }
   .fieldRow { grid-template-columns: 1fr; }
   #app { padding: 12px 10px 40px; }
 }
+
+/* 语音模型管理 */
+.modelsTask {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+.modelsTaskHead { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+#modelsTaskBar { width: 100%; height: 10px; margin: 6px 0 4px; }
+/* 卡片内边距 18px + 此处 3px = 表格内容距卡片右缘 ≥20px */
+#modelsTable { padding-right: 3px; }
+/* 固定列宽 + 任意断行：长资产文件名/说明不得把状态、大小、操作列挤出卡片 */
+.modelsTable {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+/* 覆盖全局 th/td 的 white-space:nowrap（第 142 行）——模型表的长
+   文件名/说明必须换行，否则固定列宽也会被 nowrap 撑出卡片 */
+.modelsTable th, .modelsTable td {
+  text-align: left; vertical-align: top;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 8px; font-size: 13px;
+  white-space: normal;
+  overflow-wrap: anywhere; word-break: break-word;
+}
+.modelsTable th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.modelsTable th:nth-child(2) { width: 22%; }
+.modelsTable th:nth-child(3) { width: 19%; }
+.modelsTable th:nth-child(4) { width: 134px; }
+.modelsTable .modelName { font-weight: 600; }
+.modelsTable .modelDesc { color: var(--muted); font-size: 12px; }
+.modelsTable .modelAssets { margin-top: 4px; font-size: 12px; }
+.modelsTable .modelAssets summary { cursor: pointer; color: var(--muted); }
+.modelsTable .modelAssets .modelAssetLine {
+  color: var(--muted); font-size: 12px; margin-top: 3px;
+  overflow-wrap: anywhere; word-break: break-word;
+}
+.modelsTable .btnCol { white-space: nowrap; text-align: right; }
+.modelsTable .btnCol .ghost, .modelsTable .btnCol .dangerGhost { margin-left: 6px; }
+.modelsTable .chip { margin: 2px 0 2px 6px; overflow-wrap: anywhere; max-width: 100%; }
+.modelsTable .chip:first-child { margin-left: 0; }
+.chip {
+  display: inline-block; padding: 1px 8px; margin-left: 6px;
+  border-radius: 999px; background: var(--chip); font-size: 12px;
+}
+.chip.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+.chip.warn { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); }
+.chip.err { background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
+.chip.accent { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+/* 规则/资产说明折叠区（默认只留一句导语，细则展开查看） */
+.modelsRules { margin: 4px 0 8px; }
+.modelsRules summary { cursor: pointer; }
+.modelsRules p { margin: 6px 0 0; }
+@media (max-width: 720px) {
+  /* 行转卡片：状态与操作在手机上仍然可见可用（不再隐藏状态列） */
+  .modelsTable { table-layout: auto; }
+  .modelsTable thead { display: none; }
+  .modelsTable, .modelsTable tbody { display: block; width: 100%; }
+  .modelsTable tr {
+    display: block; width: 100%;
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; margin: 0 0 10px;
+  }
+  .modelsTable td { display: block; width: 100%; border-bottom: none; padding: 4px 0; }
+  .modelsTable td:nth-child(2)::before { content: '状态：'; color: var(--muted); }
+  .modelsTable td:nth-child(3)::before { content: '整套大小：'; color: var(--muted); }
+  .modelsTable .btnCol { text-align: left; }
+  .modelsTable .btnCol .ghost, .modelsTable .btnCol .dangerGhost { margin-left: 0; margin-right: 8px; }
+}

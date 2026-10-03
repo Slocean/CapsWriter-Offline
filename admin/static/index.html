@@ -82,6 +82,32 @@
 
     <!-- 客户端令牌区已随单密钥改造移除：语音接入统一使用部署面板 API Key（网关机器门校验） -->
 
+    <!-- 语音模型管理 -->
+    <details class="card" id="modelsCard">
+      <summary>语音模型管理</summary>
+      <p class="muted small">仅支持 CapsWriter 语音识别模型；每套合计上限 5 GB（十进制，含必需的标点/对齐辅助文件）。详细规则、组件用途与官方资产文件名展开查看。</p>
+      <details class="modelsRules">
+        <summary class="muted small">模型规则与组件说明</summary>
+        <p class="muted small">
+          下载来自 CapsWriter-Offline 官方 GitHub Release（服务端固定清单 + SHA-256 校验）；
+          本区大小/字节均为十进制 GB（5 GB = 5,000,000,000 字节）；不支持上传与通用文本模型。
+          正在运行（或状态未知）的模型禁止删除与下载覆盖；Qwen3-ASR 的 q4_k/q5_k 共享运行目录，互斥安装。
+          主模型就绪即可切换；整套未完整时可只补下载缺失的辅助组件，已完整的组件不会被覆盖。
+          用途说明：标点=给无标点引擎外挂；对齐=文件转录时间戳。
+        </p>
+      </details>
+      <div id="modelsTask" class="modelsTask hidden">
+        <div class="modelsTaskHead">
+          <span id="modelsTaskText">—</span>
+          <button id="modelsTaskCancel" class="dangerGhost small">取消下载</button>
+        </div>
+        <progress id="modelsTaskBar" max="100" value="0"></progress>
+        <div id="modelsTaskDetail" class="muted small"></div>
+      </div>
+      <div id="modelsTable"></div>
+      <p id="modelsMsg" class="muted small"></p>
+    </details>
+
     <!-- 热词 -->
     <details class="card">
       <summary>服务端热词（hot-server.txt）</summary>

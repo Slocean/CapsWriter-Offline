@@ -65,6 +65,19 @@
     if (n > 1024 * 1024) return (n / 1024 / 1024).toFixed(0) + ' MB';
     return Math.round(n / 1024) + ' KB';
   }
+  function fmtBytesDecimal(n) {
+    // 模型管理区专用：十进制单位（1 GB = 1,000,000,000 字节），
+    // 与整套 5GB = 5,000,000,000 字节的硬上限同一口径，不混用 2^30 的 GiB
+    if (n === null || n === undefined) return '—';
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GB';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + ' MB';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + ' KB';
+    return n + ' B';
+  }
+  function fmtInt(n) {
+    // 千位分隔（十进制字节数原值展示）
+    return Number(n).toLocaleString('en-US');
+  }
   function fmtTime(ts) {
     if (!ts) return '—';
     var d = new Date(ts * 1000);
@@ -147,6 +160,7 @@
     api('GET', '/api/v1/settings').then(renderSettings).catch(function () {});
     api('GET', '/api/v1/hotwords').then(renderHotwords).catch(function () {});
     api('GET', '/api/v1/audit').then(renderAudit).catch(function () {});
+    api('GET', '/api/v1/models').then(renderModels).catch(function () {});
     pollLogs();
   }
 
@@ -162,6 +176,7 @@
         });
       pollLogs();
       pollAction();
+      if ($('modelsCard').open) pollModels();
     }, 5000);
   }
   function stopPolling() {
@@ -216,12 +231,12 @@
 
     setBadge(state === 'online' ? (busy ? '识别中' : '在线') : label, state);
 
-    // 启动/停止依赖控制通道；不可控（旧版 ASR 或控制通道失效）一律禁用，
-    // 避免对运行中的旧版误报“已停止”或拉起第二个模型
-    var controllable = !!asr.controllable;
-    $('startBtn').disabled = !controllable || !(state === 'stopped' || state === 'failed');
-    $('stopBtn').disabled = !controllable || state === 'stopped';
-    $('restartBtn').disabled = !controllable || state === 'stopped';
+    // R03：启动与停止是不同的能力，按后端 can_start / can_stop 分开判断——
+    // 已安全停止的新版必须允许启动；旧版（不可核身）保持全部禁用，
+    // 避免误报“已停止”或拉起第二个模型
+    $('startBtn').disabled = !asr.can_start;
+    $('stopBtn').disabled = !asr.can_stop || state === 'stopped';
+    $('restartBtn').disabled = !asr.can_restart || state === 'stopped';
   }
 
   // ---------- 动作 ----------
@@ -378,17 +393,212 @@
     });
     api('PUT', '/api/v1/settings', values)
       .then(function (res) {
-        $('settingsMsg').textContent = res.restart_required && res.restart_required.length
+        var msg = res.restart_required && res.restart_required.length
           ? '已保存。以下修改需重启识别进程生效：' + res.restart_required.join(', ')
-          : '已保存，立即生效。';
+          : '已保存。';
+        if (res.notice) msg = msg + ' ' + res.notice;   // A05：生效范围如实说明
+        $('settingsMsg').textContent = msg;
       })
       .catch(function (err) { $('settingsMsg').textContent = '保存失败：' + err.message; })
       .finally(function () { btn.disabled = false; });
   });
 
+  // ---------- 语音模型管理 ----------
+
+  var modelsData = null;
+
+  function pollModels() {
+    api('GET', '/api/v1/models').then(function (data) {
+      renderModels(data);
+    }).catch(function () {});
+  }
+
+  function modelStatusChips(m) {
+    var chips = [];
+    if (m.running) chips.push(['err', '运行中']);
+    if (m.selected) chips.push(['accent', '已选']);
+    if (m.installed_variant) chips.push(['chip', m.installed_variant]);
+    if (m.complete) chips.push(['ok', '整套完整']);
+    else if (m.main_ready) {
+      chips.push(['ok', '主模型就绪']);
+      var missing = (m.missing_components || []).length;
+      if (missing > 0) chips.push(['warn', '缺 ' + missing + ' 个组件，可补下载']);
+    } else if (m.size_bytes > 0) chips.push(['warn', '不完整']);
+    else chips.push(['chip', '未安装']);
+    return chips;
+  }
+
+  function makeChip(kindText) {
+    var span = document.createElement('span');
+    span.className = 'chip ' + (kindText[0] === 'chip' ? '' : kindText[0]);
+    span.textContent = kindText[1];
+    return span;
+  }
+
+  function renderModels(data) {
+    modelsData = data;
+    renderModelsTask(data.task);
+    var wrap = $('modelsTable');
+    wrap.textContent = '';
+    var table = document.createElement('table');
+    table.className = 'modelsTable';
+    var thead = document.createElement('thead');
+    var hr = document.createElement('tr');
+    ['模型', '状态', '整套大小', '操作'].forEach(function (t) {
+      var th = document.createElement('th'); th.textContent = t; hr.appendChild(th);
+    });
+    thead.appendChild(hr); table.appendChild(thead);
+    var tbody = document.createElement('tbody');
+    (data.models || []).forEach(function (m) {
+      var tr = document.createElement('tr');
+
+      var tdName = document.createElement('td');
+      var nameLine = document.createElement('div');
+      nameLine.className = 'modelName';
+      nameLine.textContent = m.label;
+      tdName.appendChild(nameLine);
+      var desc = document.createElement('div');
+      desc.className = 'modelDesc';
+      desc.textContent = m.description;
+      tdName.appendChild(desc);
+      // 组件用途与官方资产文件名：折叠进 <details>（导语承诺"资产文件名
+      // 展开查看"），模型能力描述与状态保持常显
+      if (m.components.length > 0) {
+        var assets = document.createElement('details');
+        assets.className = 'modelAssets';
+        var sum = document.createElement('summary');
+        sum.textContent = '组件与资产文件（' + m.components.length + '）';
+        assets.appendChild(sum);
+        m.components.forEach(function (c) {
+          var line = document.createElement('div');
+          line.className = 'modelAssetLine';
+          var prefix = c.kind === 'aux' ? '辅助 · ' : '主模型 · ';
+          line.textContent = prefix + c.purpose
+            + '（' + c.asset.name + '，' + fmtBytesDecimal(c.asset.size) + '）';
+          assets.appendChild(line);
+        });
+        tdName.appendChild(assets);
+      }
+      tr.appendChild(tdName);
+
+      var tdState = document.createElement('td');
+      modelStatusChips(m).forEach(function (c) { tdState.appendChild(makeChip(c)); });
+      m.components.forEach(function (c) {
+        var line = document.createElement('div');
+        line.className = 'modelDesc';
+        line.textContent = (c.kind === 'aux' ? '辅助' : '主模型') + '：'
+          + (c.installed ? '已安装' : (c.exists ? '不完整（缺 ' + c.required_missing.length + ' 个必需文件）' : '未安装'));
+        tdState.appendChild(line);
+      });
+      tr.appendChild(tdState);
+
+      var tdSize = document.createElement('td');
+      tdSize.textContent = m.size_bytes > 0 ? fmtBytesDecimal(m.size_bytes) : '—';
+      if (m.size_bytes > 0) {
+        var cap = document.createElement('div');
+        cap.className = 'modelDesc';
+        // 上限与大小同一十进制口径，并标明字节数原值（5 GB = 5,000,000,000 字节）
+        cap.textContent = '上限 ' + fmtBytesDecimal(m.cap_bytes)
+          + '（' + fmtInt(m.cap_bytes) + ' 字节）';
+        tdSize.appendChild(cap);
+      }
+      tr.appendChild(tdSize);
+
+      var tdBtn = document.createElement('td');
+      tdBtn.className = 'btnCol';
+      var dlBtn = document.createElement('button');
+      dlBtn.className = 'ghost';
+      dlBtn.textContent = '下载';
+      if (m.download_block) { dlBtn.disabled = true; dlBtn.title = m.download_block; }
+      dlBtn.addEventListener('click', function () { startModelDownload(m); });
+      tdBtn.appendChild(dlBtn);
+      var delBtn = document.createElement('button');
+      delBtn.className = 'dangerGhost';
+      delBtn.textContent = '删除';
+      if (m.delete_block) { delBtn.disabled = true; delBtn.title = m.delete_block; }
+      delBtn.addEventListener('click', function () { confirmDeleteModel(m); });
+      tdBtn.appendChild(delBtn);
+      tr.appendChild(tdBtn);
+
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+  }
+
+  function renderModelsTask(task) {
+    var box = $('modelsTask');
+    if (!task || ['done', 'failed', 'cancelled'].indexOf(task.state) >= 0) {
+      if (task && task.state !== 'done') {
+        // 结束态短暂展示结果，之后随下次轮询消失
+        box.classList.remove('hidden');
+        $('modelsTaskText').textContent = task.state === 'failed'
+          ? '下载失败：' + (task.error || '未知原因')
+          : '下载已取消';
+        $('modelsTaskBar').value = 0;
+        $('modelsTaskDetail').textContent = '';
+        $('modelsTaskCancel').classList.add('hidden');
+        return;
+      }
+      box.classList.add('hidden');
+      return;
+    }
+    box.classList.remove('hidden');
+    $('modelsTaskCancel').classList.remove('hidden');
+    var label = { pending: '排队中', running: task.stage || '执行中' }[task.state] || task.state;
+    $('modelsTaskText').textContent = '下载 ' + (task.label || task.model) + '：' + label;
+    var total = task.bytes_total || 0;
+    var done = task.bytes_received || 0;
+    var bar = $('modelsTaskBar');
+    bar.max = total > 0 ? total : 1;
+    bar.value = done;
+    $('modelsTaskDetail').textContent = total > 0
+      ? ('组件 ' + ((task.asset_index || 0) + 1) + '/' + task.asset_count + ' · '
+         + fmtBytesDecimal(done) + ' / ' + fmtBytesDecimal(total)
+         + '（' + fmtInt(done) + ' / ' + fmtInt(total) + ' 字节）')
+      : '';
+  }
+
+  $('modelsTaskCancel').addEventListener('click', function () {
+    api('POST', '/api/v1/models/task/cancel', {})
+      .then(function () { $('modelsMsg').textContent = '已请求取消，等待任务退出…'; pollModels(); })
+      .catch(function (err) { $('modelsMsg').textContent = '取消失败：' + err.message; });
+  });
+
+  function startModelDownload(m) {
+    api('POST', '/api/v1/models/download', { model: m.key })
+      .then(function () {
+        $('modelsMsg').textContent = '已开始下载 ' + m.label + '。';
+        pollModels();
+      })
+      .catch(function (err) {
+        $('modelsMsg').textContent = '下载被拒绝：' + err.message;
+        pollModels();
+      });
+  }
+
+  function confirmDeleteModel(m) {
+    var lines = ['确定删除 ' + m.label + '？'];
+    if (m.running) lines.push('警告：它正在运行，服务端也会拒绝。');
+    if (m.selected) lines.push('注意：它是当前设置选中的模型，删除后启动识别会失败；建议先切换到其他已安装模型。');
+    if (m.variant) lines.push('q4_k 与 q5_k 共享运行目录，删除会同时移除已安装的量化变体与对齐辅助模型。');
+    lines.push('仅删除该模型的固定目录，不影响其他模型。');
+    if (!window.confirm(lines.join('\n'))) return;
+    api('POST', '/api/v1/models/delete', { model: m.key, confirm: true })
+      .then(function (res) {
+        $('modelsMsg').textContent = '已删除 ' + m.label + (res.note || '');
+        pollModels();
+      })
+      .catch(function (err) {
+        $('modelsMsg').textContent = '删除被拒绝：' + err.message;
+        pollModels();
+      });
+  }
+
   // ---------- 日志 ----------
 
   function pollLogs() {
+    if (logPaused) return;   // R14：暂停时不发日志请求、游标保持不变
     api('GET', '/api/v1/logs?cursor=' + logCursor)
       .then(function (data) {
         var view = $('logView');
@@ -437,6 +647,8 @@
           showGatewayNotice();
         }
       } else if (data.authenticated) {
+        // R13：password 模式恢复已有会话时一并取回 CSRF，刷新后写操作可用
+        if (data.csrf) csrf = data.csrf;
         showMain();
       } else {
         showLogin();
