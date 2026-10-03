@@ -10,6 +10,7 @@
   python scripts/client_runtime_probe.py <installed_dir> <out.json> \
       [--expected-addr 192.168.0.104] [--expected-port 6016] [--no-network]
 """
+import argparse
 import asyncio
 import hashlib
 import json
@@ -25,22 +26,24 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="已安装客户端无麦克风运行时探针")
+    parser.add_argument("installed", help="被测安装目录")
+    parser.add_argument("out", help="结果 JSON 输出路径")
+    parser.add_argument("--expected-addr", default="192.168.0.104")
+    parser.add_argument("--expected-port", default="6016")
+    parser.add_argument("--no-network", action="store_true",
+                        help="只做导入与配置校验（runner 连不到局域网服务器）")
+    return parser.parse_args()
+
 
 def main() -> None:
     sys.dont_write_bytecode = True  # 探针不得向被测安装目录写 __pycache__
-    args = sys.argv[1:]
-    no_network = "--no-network" in args
-    args = [a for a in args if not a.startswith("--")]
-
-    def option(name, default):
-        return args[args.index(name) + 1] if name in args else default
-
-    if len(args) < 2:
-        raise SystemExit(__doc__)
-    installed = pathlib.Path(args[0]).resolve()
-    out_path = pathlib.Path(args[1]).resolve()
-    expected_addr = option("--expected-addr", "192.168.0.104")
-    expected_port = option("--expected-port", "6016")
+    options = parse_args()
+    installed = pathlib.Path(options.installed).resolve()
+    out_path = pathlib.Path(options.out).resolve()
+    expected_addr = options.expected_addr
+    expected_port = options.expected_port
 
     internal = installed / "internal"
     if not installed.is_dir() or not internal.is_dir():
@@ -48,8 +51,13 @@ def main() -> None:
     sys.path[:0] = [str(installed), str(internal), str(internal / "win32"), str(internal / "win32/lib")]
     sys.frozen = True
     sys._MEIPASS = str(internal)
-    for dll_dir in {p.parent for p in internal.rglob("*.dll")}:
+    # 句柄必须保留在存活列表里，否则 add_dll_directory 注册的搜索路径会被
+    # 立即释放，隔离解释器里造成 DLL 假失败
+    dll_handles = [
         os.add_dll_directory(str(dll_dir))
+        for dll_dir in {p.parent for p in internal.rglob("*.dll")}
+    ]
+    assert len(dll_handles) > 0
 
     from config_client import ClientConfig
     from core.client.app import CapsWriterClient
@@ -92,7 +100,7 @@ def main() -> None:
         raise SystemExit("交付默认 server_url 应为空（由用户在界面里开启远程模式）")
     checks["default_delivery_config_verified"] = True
 
-    if not no_network:
+    if not options.no_network:
         async def probe() -> None:
             state = ClientState()
             manager = WebSocketManager(types.SimpleNamespace(state=state))

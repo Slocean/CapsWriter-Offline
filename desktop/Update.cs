@@ -217,14 +217,19 @@ internal static partial class Desktop {
                 try {
                     if (flavor == "portable-nohost")
                         throw new InvalidOperationException("当前运行的是便携版解压后的内部副本。请通过便携版单文件 EXE 启动程序后再更新。");
-                    string downloadPath;
+                    // 下载到正式 .exe 文件名：CreateProcess / PowerShell 只认
+                    // .exe 扩展名；暂存目录按版本隔离，先清空旧内容。
+                    string staging;
                     if (flavor == "portable") {
                         string outer = OuterPortableExe();
                         if (outer == null) throw new InvalidOperationException("找不到便携版外层 EXE。");
-                        downloadPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outer)), info.AssetName + ".update-download");
+                        staging = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outer)), ".update-staging");
                     } else {
-                        downloadPath = Path.Combine(Path.GetTempPath(), info.AssetName + ".update-download");
+                        staging = Path.Combine(Path.GetTempPath(), "CapsWriter-Update-" + info.Version);
                     }
+                    if (Directory.Exists(staging)) { try { Directory.Delete(staging, true); } catch { } }
+                    Directory.CreateDirectory(staging);
+                    string downloadPath = Path.Combine(staging, info.AssetName);
                     DownloadAsset(info, downloadPath);
                     // 应用前重新计算磁盘文件的 SHA256（第二次校验）
                     string actual = Sha256File(downloadPath);
@@ -269,16 +274,24 @@ internal static partial class Desktop {
         ExitViaDispatcher();
     }
 
-    // 安装版：用 PowerShell 等待本进程退出后静默运行新安装包；Inno 沿用
-    // 上次安装目录（UsePreviousAppDir），配置/热词/凭据保留。
+    // 安装版：交给 update-setup-wrapper.ps1——等待本进程退出（超时放弃更新）、
+    // 静默运行新安装包（Inno 沿用上次安装目录并在失败时自动还原被替换文件）、
+    // 检查安装退出码，成功才从原安装目录重启应用；结果写入
+    // update-setup-result.txt 供诊断。
     static void ApplySetupUpdate(UpdateInfo info, string downloadPath) {
         SetStatusThreadSafe("正在等待界面退出并启动安装程序…");
+        string wrapper = Path.Combine(Dir, "update-setup-wrapper.ps1");
+        if (!File.Exists(wrapper))
+            throw new InvalidOperationException("缺少更新辅助脚本 update-setup-wrapper.ps1。");
+        string resultPath = Path.Combine(Dir, "update-setup-result.txt");
+        try { File.Delete(resultPath); } catch { }
         int pid = Process.GetCurrentProcess().Id;
-        string script = "try { Wait-Process -Id " + pid + " -Timeout 60 -ErrorAction Stop } catch { }\r\n" +
-            "& '" + downloadPath.Replace("'", "''") + "' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART";
-        string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
         var psi = new ProcessStartInfo("powershell.exe") {
-            Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + encoded,
+            Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + wrapper + "\""
+                + " -SetupPath \"" + downloadPath + "\""
+                + " -GuiPid " + pid
+                + " -AppDir \"" + Dir + "\""
+                + " -ResultPath \"" + resultPath + "\"",
             UseShellExecute = false, CreateNoWindow = true
         };
         Process.Start(psi);

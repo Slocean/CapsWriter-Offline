@@ -69,7 +69,7 @@ def apply_lan_default(config_path: pathlib.Path, lan_addr: str) -> None:
 
 def verify_payload(payload: pathlib.Path) -> dict:
     errors = []
-    for name in ("start_client.exe", "CapsWriterDesktop.exe", "config_client.py"):
+    for name in ("start_client.exe", "CapsWriterDesktop.exe", "config_client.py", "update-setup-wrapper.ps1"):
         if not (payload / name).is_file():
             errors.append(f"缺少 {name}")
     if not (payload / "internal").is_dir():
@@ -163,8 +163,11 @@ def main() -> None:
     for name in USER_FILES:
         copy_file(repo / name, out / name)
 
-    # 5. 桌面 GUI 与说明文档
+    # 5. 桌面 GUI、热更新辅助脚本与说明文档
     copy_file(gui_exe, out / "CapsWriterDesktop.exe")
+    if not (repo / "desktop" / "update-setup-wrapper.ps1").is_file():
+        raise SystemExit("仓库缺少 desktop/update-setup-wrapper.ps1")
+    copy_file(repo / "desktop" / "update-setup-wrapper.ps1", out / "update-setup-wrapper.ps1")
     copy_file(repo / "desktop" / "README.md", out / "Desktop-README.md")
 
     # 6. 交付默认服务器地址（与已验收 staged 客户端一致）

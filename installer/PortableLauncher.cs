@@ -23,18 +23,23 @@ internal static class PortableLauncher {
         }
     }
 
-    // 清理上次热更新残留（下载临时文件、旧版备份）；文件仍被占用时忽略，下次启动再清。
+    // 清理孤儿更新残留（下载暂存目录、旧版备份、部分写入）；文件仍被占用
+    // 或更新事务进行中（helper 还持有备份）时跳过，下次正常启动再清。
     static void CleanupUpdateArtifacts() {
         try {
+            if (Environment.GetEnvironmentVariable("CAPSWRITER_UPDATE_IN_PROGRESS") == "1") return;
             string self = SelfExe;
             if (string.IsNullOrEmpty(self)) return;
             string dir = Path.GetDirectoryName(Path.GetFullPath(self));
             if (dir == null || !Directory.Exists(dir)) return;
             string stem = Path.GetFileNameWithoutExtension(self);
-            foreach (string pattern in new[] { stem + ".update-*", stem + ".update-bak" }) {
+            foreach (string pattern in new[] { stem + ".update-*", "*.update-partial", "*.update-bak", "*.update-error.txt" }) {
                 foreach (string file in Directory.GetFiles(dir, pattern)) {
                     try { File.Delete(file); } catch { }
                 }
+            }
+            foreach (string staging in Directory.GetDirectories(dir, ".update-staging")) {
+                try { Directory.Delete(staging, true); } catch { }
             }
         } catch { }
     }
@@ -104,42 +109,95 @@ internal static class PortableLauncher {
         catch (Exception) { return 2; }
     }
 
-    // --replace-self <旧EXE路径> [--wait-pid <pid>]：
-    // 等待旧 GUI 退出 → 旧 EXE 改名备份 → 用自己覆盖旧 EXE → 校验 → 启动 → 成功后退出。
-    // 任何一步失败都把备份改回原名并报错，绝不留下损坏的外层 EXE。
+    static string Sha256Hex(string path) {
+        using (var sha = SHA256.Create())
+        using (var stream = File.OpenRead(path)) {
+            return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+        }
+    }
+
+    // 诊断开关，仅供更新事务小样测试使用（生产环境永不设置；环境变量随
+    // 进程继承，测试用它控制"被启动的新版本"行为，全程不开 GUI/不录音）：
+    //   1          = Extract 成功后直接 exit 0（解压本身即启动成功证据）
+    //   fail-start = Extract 成功后 exit 3，模拟应用启动失败
+    //   fail-partial = 暂存写入并校验后、原子替换前 exit 4（证明部分写入不碰旧 EXE）
+    static string DiagMode {
+        get { return Environment.GetEnvironmentVariable("CAPSWRITER_UPDATE_DIAGNOSTIC"); }
+    }
+
+    // --replace-self <旧EXE路径> [--wait-pid <pid>] 更新事务核心（生产路径）：
+    // 1. 等待旧 GUI 退出（pid 已不存在 = 已退出，继续）；
+    // 2. 新版本先完整写入同目录 .update-partial 并逐字节校验——此阶段旧 EXE
+    //    未被触碰，崩溃/部分写入/校验失败都绝不影响当前可用程序；
+    // 3. File.Replace 一步原子替换：新版本生效，旧版本完整落入 .update-bak；
+    // 4. 启动新版本并观察退出码（解压/启动失败 60s 内以非零退出）；
+    // 5. 任一步失败都从备份恢复旧版并重新启动旧版，成功才删除备份。
+    // 嵌入 ZIP 的 PayloadHash 只在 Extract 内校验；此处比较的是
+    // "写入文件 vs 已验证下载 EXE"同一对象。
     static int ReplaceSelf(string target, int waitPid) {
+        string backup = null;
+        string partial = null;
         try {
             target = Path.GetFullPath(target);
             if (!File.Exists(target)) throw new FileNotFoundException("找不到要替换的便携版 EXE。", target);
             if (waitPid > 0 && WaitForExit(waitPid, 120) != 0)
                 throw new IOException("等待旧界面退出超时，已取消更新。");
             string self = Path.GetFullPath(SelfExe);
-            string backup = target + ".update-bak";
-            if (File.Exists(backup)) { try { File.Delete(backup); } catch { } }
-            File.Move(target, backup);
+            string selfHash = Sha256Hex(self);
+            partial = target + ".update-partial";
+            try { if (File.Exists(partial)) File.Delete(partial); } catch { }
+            File.Copy(self, partial, true);
+            if (Sha256Hex(partial) != selfHash)
+                throw new InvalidDataException("新版本暂存写入校验失败，旧 EXE 未被改动。");
+            if (DiagMode == "fail-partial") return 4;
+            backup = target + ".update-bak";
+            try { if (File.Exists(backup)) File.Delete(backup); } catch { }
+            File.Replace(partial, target, backup);
+            partial = null;
             try {
-                File.Copy(self, target, true);
-                using (var sha = SHA256.Create())
-                using (var stream = File.OpenRead(target)) {
-                    string hash = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
-                    if (hash != PayloadHash) throw new InvalidDataException("替换后的便携版校验失败。");
-                }
+                var psi = new ProcessStartInfo(target) {
+                    WorkingDirectory = Path.GetDirectoryName(target), UseShellExecute = false
+                };
+                // 标记"更新事务进行中"：被启动的启动器据此跳过更新残留清理，
+                // 否则它会把本 helper 回滚所需的 .update-bak 提前删掉
+                psi.EnvironmentVariables["CAPSWRITER_UPDATE_IN_PROGRESS"] = "1";
+                var started = Process.Start(psi);
+                if (started == null) throw new IOException("新便携版未能启动。");
+                bool failed = started.WaitForExit(60000) && started.ExitCode != 0;
+                if (failed)
+                    throw new IOException("新便携版启动后自行退出（ExitCode " + started.ExitCode + "），已回滚。");
             } catch {
-                try { if (File.Exists(target)) File.Delete(target); } catch { }
-                File.Move(backup, target); // 回滚
+                try { File.Replace(backup, target, null); }
+                catch {
+                    try { if (File.Exists(target)) File.Delete(target); } catch { }
+                    File.Move(backup, target);
+                }
+                backup = null;
+                var psi2 = new ProcessStartInfo(target) {
+                    WorkingDirectory = Path.GetDirectoryName(target), UseShellExecute = false
+                };
+                // 回滚重启同样处于更新事务收尾阶段：跳过残留清理，避免吃掉
+                // 错误留痕与暂存文件；下次正常启动再清
+                psi2.EnvironmentVariables["CAPSWRITER_UPDATE_IN_PROGRESS"] = "1";
+                try {
+                    Process.Start(psi2);
+                } catch { }
                 throw;
             }
-            try { File.Delete(backup); } catch { }
-            Process.Start(new ProcessStartInfo(target) { WorkingDirectory = Path.GetDirectoryName(target), UseShellExecute = false });
+            try { if (File.Exists(backup)) File.Delete(backup); } catch { }
+            backup = null;
             return 0;
         } catch (Exception ex) {
+            try { if (partial != null && File.Exists(partial)) File.Delete(partial); } catch { }
             try {
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target)));
                 File.WriteAllText(target + ".update-error.txt",
                     DateTime.Now.ToString("s") + Environment.NewLine + ex);
             } catch { }
-            MessageBox.Show("便携版更新失败，已保留原文件。\r\n\r\n" + ex.Message,
-                "CapsWriter 便携版更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (DiagMode == null) {
+                MessageBox.Show("便携版更新失败，已恢复原文件。\r\n\r\n" + ex.Message,
+                    "CapsWriter 便携版更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
             return 1;
         }
     }
@@ -157,6 +215,9 @@ internal static class PortableLauncher {
             string cache = Extract(root);
             CleanupUpdateArtifacts();
             if (verify) { File.WriteAllText(Path.Combine(Path.GetFullPath(root), "verified-path.txt"), cache); return 0; }
+            string diag = DiagMode;
+            if (diag == "1") return 0;          // 更新事务小样：解压成功即启动成功
+            if (diag == "fail-start") return 3; // 更新事务小样：可控启动失败
             var psi = new ProcessStartInfo(Path.Combine(cache, "CapsWriterDesktop.exe")) {
                 WorkingDirectory = cache, UseShellExecute = false
             };

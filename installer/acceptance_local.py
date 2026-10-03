@@ -68,6 +68,38 @@ def desktop_shortcut() -> pathlib.Path:
     return pathlib.Path(desktop) / "CapsWriter.lnk"
 
 
+def parse_lnk(path: pathlib.Path) -> dict:
+    """直接解析 .lnk 的 Unicode StringData（IShellLinkW 数据），不走任何
+    ANSI COM 读取接口。WScript.Shell 的 TargetPath/WorkingDirectory 读的是
+    LinkInfo 的 ANSI 块，cp1252 系统上中文会变成 '?'（run6 反例根因），
+    而 .lnk 里的 Unicode 数据与双击行为始终正确。"""
+    import struct
+    data = path.read_bytes()
+    magic, = struct.unpack_from("<I", data, 0)
+    assert magic == 0x0000004C, f"不是 Shell Link 文件: {path}"
+    link_flags, = struct.unpack_from("<I", data, 20)
+    offset = 76
+    if link_flags & 0x1:  # HasLinkTargetIDList
+        idlist_size, = struct.unpack_from("<H", data, offset)
+        offset += 2 + idlist_size
+    if link_flags & 0x2:  # HasLinkInfo
+        linkinfo_size, = struct.unpack_from("<I", data, offset)
+        offset += linkinfo_size
+    assert link_flags & 0x80, "lnk 缺少 Unicode 标志"
+    fields, bit = {}, 0x4
+    for label in ("name", "relative_path", "working_dir", "command_line", "icon_location"):
+        if not link_flags & bit:
+            bit <<= 1
+            continue
+        cch, = struct.unpack_from("<H", data, offset)
+        offset += 2
+        raw = data[offset:offset + cch * 2]
+        fields[label] = raw.decode("utf-16-le")
+        offset += cch * 2
+        bit <<= 1
+    return fields
+
+
 def run_installer(setup: pathlib.Path, log: pathlib.Path, target: pathlib.Path, upgrade: bool) -> None:
     argv = [str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
     if not upgrade:
@@ -161,16 +193,15 @@ def main() -> None:
         assert probe.returncode == 0, "升级后运行时探针失败"
 
         assert shortcut.exists(), "桌面快捷方式未创建"
-        raw = ps(
-            "[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false);"
-            "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('" + str(shortcut).replace("'", "''") + "');"
-            "@{target=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s.TargetPath));"
-            "cwd=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s.WorkingDirectory))}|ConvertTo-Json -Compress")
-        info = {k: base64.b64decode(v).decode("utf-8") for k, v in json.loads(raw).items()}
-        result["desktop_shortcut"] = dict(info)
-        assert os.path.normcase(info.get("target") or "") == os.path.normcase(str(target / "CapsWriterDesktop.exe")) \
-            and os.path.normcase(info.get("cwd") or "") == os.path.normcase(str(target)), \
-            f"桌面快捷方式指向错误: {info!r}"
+        lnk = parse_lnk(shortcut)
+        result["desktop_shortcut_lnk_unicode"] = lnk
+        # lnk 的 RELATIVE_PATH 相对快捷方式所在目录；目标与工作目录都必须
+        # 指向安装目录（Unicode 数据，不受系统代码页影响）
+        target_from_lnk = (shortcut.parent / lnk["relative_path"]).resolve()
+        assert os.path.normcase(str(target_from_lnk)) == os.path.normcase(str(target / "CapsWriterDesktop.exe")), \
+            f"桌面快捷方式目标错误: {lnk!r}"
+        assert os.path.normcase(lnk["working_dir"]) == os.path.normcase(str(target)), \
+            f"桌面快捷方式工作目录错误: {lnk!r}"
         result["desktop_shortcut_target_and_working_directory_verified"] = True
 
         uninstaller = target / "unins000.exe"

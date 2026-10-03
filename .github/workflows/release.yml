@@ -154,6 +154,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
+          # 发版源码绑定：tag 必须指向本次 runner 实际构建的 commit，
+          # 不允许 GitHub 在 tag 不存在时落到默认分支之外的 commit
+          target_commitish: ${{ github.sha }}
           name: CapsWriter ${{ steps.ver.outputs.version }}
           draft: false
           prerelease: ${{ steps.ver.outputs.prerelease == 'true' }}
