@@ -170,3 +170,10 @@ jobs:
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure release is published
+        # softprops/action-gh-release 在部分场景会留下 draft 状态，而
+        # releases/latest/download 更新通道只服务已发布 Release，必须兜底
+        run: gh release edit ${{ steps.ver.outputs.tag }} --draft=false --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
