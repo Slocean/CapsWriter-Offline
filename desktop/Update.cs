@@ -69,19 +69,19 @@ internal static partial class Desktop {
 
     static UIElement UpdateSection() {
         var panel = new StackPanel();
-        panel.Children.Add(Text("软件更新", 13, "#333538", "#E6E7E6", true));
+        panel.Children.Add(SectionTitle("软件更新"));
         var row = new Grid { Margin = new Thickness(0, 12, 0, 0) };
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        updateCurrent = Text("当前版本 v" + AppVersion + "（" + FlavorLabel() + "）", 12, "#545659", "#C4C6C7", true);
+        updateCurrent = Text("当前版本 v" + AppVersion + "（" + FlavorLabel() + "）", 12, "#5A5D62", "#C7C9C8", true);
         left.Children.Add(updateCurrent);
-        updateStatus = Text("通过 GitHub Releases 分发；更新前会校验 SHA256，失败自动回滚。", 11, "#77797C", "#A4A6A8");
+        updateStatus = Text("通过 GitHub Releases 分发；更新前会校验 SHA256，失败自动回滚。", 11, "#7A7E83", "#A2A5A9");
         updateStatus.TextWrapping = TextWrapping.Wrap;
         updateStatus.Margin = new Thickness(0, 5, 12, 0);
         left.Children.Add(updateStatus);
         row.Children.Add(left);
-        updateButton = ThemeButton("检查更新", "#222326", "#F0F0EE", "#FFFFFF", "#1C1D1E", 9);
+        updateButton = ThemeButton("检查更新", "#26282B", "#EDEEEC", "#FFFFFF", "#1D1F22", 9);
         updateButton.Width = 96;
         updateButton.Height = 34;
         updateButton.FontSize = 11;
@@ -152,7 +152,7 @@ internal static partial class Desktop {
             Title = "CapsWriter 更新公告",
             Width = 560, Height = 560,
             WindowStartupLocation = WindowStartupLocation.CenterScreen,
-            Background = T("#F7F7F5", "#121315"),
+            Background = T("#F6F7F5", "#141517"),
             FontFamily = main.FontFamily
         };
         var root = new Grid { Margin = new Thickness(24, 18, 24, 18) };
@@ -163,13 +163,13 @@ internal static partial class Desktop {
         var heading = new StackPanel();
         var titleRow = new TextBlock {
             FontSize = 19, FontWeight = FontWeights.SemiBold,
-            Foreground = T("#1B1C1F", "#F3F3F1"),
+            Foreground = T("#1D1F22", "#F1F2F0"),
             Text = "发现新版本 v" + info.Version + "（当前 v" + AppVersion + " · " + FlavorLabel() + "）"
         };
         heading.Children.Add(titleRow);
         var subtitle = new TextBlock {
             FontSize = 13, Margin = new Thickness(0, 6, 0, 0),
-            Foreground = T("#545659", "#C4C6C7"), TextWrapping = TextWrapping.Wrap,
+            Foreground = T("#5A5D62", "#C7C9C8"), TextWrapping = TextWrapping.Wrap,
             Text = info.Title
         };
         heading.Children.Add(subtitle);
@@ -179,7 +179,7 @@ internal static partial class Desktop {
         var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(0, 14, 0, 0) };
         var body = new TextBlock {
             FontSize = 13, TextWrapping = TextWrapping.Wrap,
-            Foreground = T("#333538", "#D8DAD9"),
+            Foreground = T("#33363A", "#E7E8E6"),
             Text = info.Announcement
         };
         scroll.Content = body;
@@ -187,9 +187,9 @@ internal static partial class Desktop {
         root.Children.Add(scroll);
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
-        var later = ThemeButton("以后再说", "#F1F2F0", "#303235", "#4A4C4F", "#D1D3D3", 9);
+        var later = ThemeButton("以后再说", "#F0F1EE", "#2E3134", "#5A5D62", "#C7C9C8", 9);
         later.Width = 108; later.Height = 38;
-        var now = ThemeButton("立即更新", "#222326", "#F0F0EE", "#FFFFFF", "#1C1D1E", 9);
+        var now = ThemeButton("立即更新", "#26282B", "#EDEEEC", "#FFFFFF", "#1D1F22", 9);
         now.Width = 108; now.Height = 38; now.Margin = new Thickness(10, 0, 0, 0);
         bool apply = false;
         later.Click += (s, e) => { window.Close(); };

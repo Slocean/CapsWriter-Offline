@@ -22,7 +22,7 @@ internal static partial class Desktop {
 
     static UIElement ShortcutSettingsPanel() {
         var panel=new StackPanel { Margin=new Thickness(0,13,0,0) };
-        panel.Children.Add(Text("录音快捷键",11,"#747679","#A7A9AB"));
+        panel.Children.Add(FieldLabel("录音快捷键"));
         holdHotkey=Switch("启用");
         toggleHotkey=Switch("启用");
         holdHotkey.IsChecked=true;
@@ -40,7 +40,7 @@ internal static partial class Desktop {
         toggleHotkey.Unchecked+=(s,e)=>ScheduleShortcutApply();
         panel.Children.Add(ShortcutRow("长按说话",holdKeyButton,holdHotkey));
         panel.Children.Add(ShortcutRow("按键开关",toggleKeyButton,toggleHotkey));
-        captureHint=Text("点击按键框后按下键或组合键；Esc 取消。",11,"#77797C","#A7A9AB");
+        captureHint=Hint("点击按键框后按下键或组合键；Esc 取消。");
         captureHint.Margin=new Thickness(0,8,0,0);
         panel.Children.Add(captureHint);
         UpdateShortcutButtons();
@@ -62,19 +62,20 @@ internal static partial class Desktop {
 
     static Grid ShortcutRow(string label,Button keyButton,CheckBox enabled) {
         var row=new Grid { Margin=new Thickness(0,8,0,0) };
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(96) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(90) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(80) });
-        row.Children.Add(Text(label,12,"#303235","#E6E7E6",true));
+        // 94px 容纳开关(36)+间距(10)+"启用"文字——80px 在 640 最小宽下会裁掉文字
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(94) });
+        row.Children.Add(Text(label,12,"#33363A","#E7E8E6",true));
         keyButton.HorizontalAlignment=HorizontalAlignment.Stretch;
         Grid.SetColumn(keyButton,1);row.Children.Add(keyButton);
-        enabled.Margin=new Thickness(12,0,0,0);
+        enabled.Margin=new Thickness(8,0,0,0);
         Grid.SetColumn(enabled,2);row.Children.Add(enabled);
         return row;
     }
 
     static Button ShortcutCaptureButton() {
-        var button=ThemeButton("","#F6F6F4","#292A2D","#252628","#EEEEEC",8);
+        var button=ThemeButton("","#F3F4F1","#2A2C30","#33363A","#E7E8E6",8);
         button.Height=36;
         button.HorizontalContentAlignment=HorizontalAlignment.Left;
         button.Padding=new Thickness(12,0,10,0);

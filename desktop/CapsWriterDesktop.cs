@@ -92,11 +92,17 @@ internal static partial class Desktop {
     }
 
     static Brush B(string hex) { return (Brush)new BrushConverter().ConvertFromString(hex); }
+    // 控件交互态：悬停/按下用半透明遮罩层，禁用整体降不透明度——
+    // 不改动各按钮自己的主题背景色，明暗主题通用。
+    // 结构：Border(Root) 唯一子级是 Grid，Grid 内叠 ContentPresenter 与
+    // Shade 遮罩（Border 只能有一个 Child，遮罩必须放进容器层）。
     static ControlTemplate ButtonTemplate(double radius) {
         var border=new FrameworkElementFactory(typeof(Border));
+        border.Name="Root";
         border.SetValue(Border.CornerRadiusProperty,new CornerRadius(radius));
         border.SetBinding(Border.BackgroundProperty,new System.Windows.Data.Binding("Background") {
             RelativeSource=new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent) });
+        var layer=new FrameworkElementFactory(typeof(Grid));
         var content=new FrameworkElementFactory(typeof(ContentPresenter));
         content.SetBinding(FrameworkElement.HorizontalAlignmentProperty,
             new System.Windows.Data.Binding("HorizontalContentAlignment") {
@@ -104,22 +110,38 @@ internal static partial class Desktop {
         content.SetBinding(FrameworkElement.VerticalAlignmentProperty,
             new System.Windows.Data.Binding("VerticalContentAlignment") {
                 RelativeSource=new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent) });
-        border.AppendChild(content);
-        return new ControlTemplate(typeof(Button)) { VisualTree=border };
+        layer.AppendChild(content);
+        var shade=new FrameworkElementFactory(typeof(Border));
+        shade.Name="Shade";
+        shade.SetValue(Border.CornerRadiusProperty,new CornerRadius(radius));
+        shade.SetValue(Border.BackgroundProperty,B("#000000"));
+        shade.SetValue(Border.OpacityProperty,0.0);
+        shade.SetValue(UIElement.IsHitTestVisibleProperty,false);
+        layer.AppendChild(shade);
+        border.AppendChild(layer);
+        var template=new ControlTemplate(typeof(Button)) { VisualTree=border };
+        var hover=new Trigger { Property=UIElement.IsMouseOverProperty, Value=true };
+        hover.Setters.Add(new Setter(Border.OpacityProperty,0.06,"Shade"));
+        var pressed=new Trigger { Property=System.Windows.Controls.Primitives.ButtonBase.IsPressedProperty, Value=true };
+        pressed.Setters.Add(new Setter(Border.OpacityProperty,0.13,"Shade"));
+        var disabled=new Trigger { Property=UIElement.IsEnabledProperty, Value=false };
+        disabled.Setters.Add(new Setter(UIElement.OpacityProperty,0.45,"Root"));
+        template.Triggers.Add(hover);template.Triggers.Add(pressed);template.Triggers.Add(disabled);
+        return template;
     }
-    static Button Btn(string value,string bg="#346BEE",string fg="#FFFFFF",double radius=10) {
+    static Button Btn(string value,string bg="#3F6AC4",string fg="#FFFFFF",double radius=10) {
         return new Button { Content=value, Height=40, Padding=new Thickness(16,0,16,0),
             Background=B(bg), Foreground=B(fg), BorderThickness=new Thickness(0),
             FontSize=13, FontWeight=FontWeights.SemiBold, Cursor=Cursors.Hand,
             Template=ButtonTemplate(radius) };
     }
     static TextBox Field() {
-        return new TextBox { Height=42, FontSize=14, Foreground=T("#202123","#F1F1EF"),
-            Background=T("#FAFAF9","#242527"), BorderBrush=T("#DCDDDC","#45474A"), BorderThickness=new Thickness(1),
+        return new TextBox { Height=42, FontSize=14, Foreground=T("#202226","#F0F1EF"),
+            Background=T("#FBFBFA","#232529"), BorderBrush=T("#D8DAD6","#484B50"), BorderThickness=new Thickness(1),
             Padding=new Thickness(11,9,11,7), VerticalContentAlignment=VerticalAlignment.Center };
     }
     static CheckBox Switch(string title) {
-        var toggle=new CheckBox { Content=title, Foreground=T("#303133","#E5E5E3"), FontSize=13,
+        var toggle=new CheckBox { Content=title, Foreground=T("#33363A","#E7E8E6"), FontSize=13,
             VerticalAlignment=VerticalAlignment.Center, Cursor=Cursors.Hand };
         var root=new FrameworkElementFactory(typeof(StackPanel));
         root.SetValue(StackPanel.OrientationProperty,Orientation.Horizontal);
@@ -128,7 +150,7 @@ internal static partial class Desktop {
         track.SetValue(Border.WidthProperty,36.0);
         track.SetValue(Border.HeightProperty,21.0);
         track.SetValue(Border.CornerRadiusProperty,new CornerRadius(11));
-        track.SetValue(Border.BackgroundProperty,T("#C4C8CC","#55585B"));
+        track.SetValue(Border.BackgroundProperty,T("#C9CCD0","#575B5F"));
         track.SetValue(Border.MarginProperty,new Thickness(0,0,10,0));
         var thumb=new FrameworkElementFactory(typeof(Ellipse));
         thumb.Name="Thumb";
@@ -144,7 +166,7 @@ internal static partial class Desktop {
         root.AppendChild(caption);
         var template=new ControlTemplate(typeof(CheckBox)) { VisualTree=root };
         var on=new Trigger { Property=System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, Value=true };
-        on.Setters.Add(new Setter(Border.BackgroundProperty,T("#222326","#F0F0EE"),"Track"));
+        on.Setters.Add(new Setter(Border.BackgroundProperty,T("#26282B","#EDEEEC"),"Track"));
         on.Setters.Add(new Setter(FrameworkElement.HorizontalAlignmentProperty,HorizontalAlignment.Right,"Thumb"));
         template.Triggers.Add(on);
         toggle.Template=template;
@@ -154,19 +176,19 @@ internal static partial class Desktop {
         main=new Window { Title="CapsWriter · 语音输入", Width=760,Height=680,
             MinWidth=640,MinHeight=560,WindowStartupLocation=WindowStartupLocation.CenterScreen,
             WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.CanResize,
-            Background=T("#F7F7F5","#121315"),FontFamily=new FontFamily("Microsoft YaHei UI") };
+            Background=T("#F6F7F5","#141517"),FontFamily=new FontFamily("Microsoft YaHei UI") };
         string iconPath=Path.Combine(Dir,"assets","icon.ico");
         if(File.Exists(iconPath)) main.Icon=System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(iconPath));
         System.Windows.Shell.WindowChrome.SetWindowChrome(main,new System.Windows.Shell.WindowChrome {
             CaptionHeight=64,ResizeBorderThickness=new Thickness(6),GlassFrameThickness=new Thickness(0),
             CornerRadius=new CornerRadius(0),UseAeroCaptionButtons=false });
         main.Closing+=(s,e)=>{if(!exiting){e.Cancel=true;main.Hide();}};
-        var root=new Grid { Background=T("#F7F7F5","#121315") };
+        var root=new Grid { Background=T("#F6F7F5","#141517") };
         root.RowDefinitions.Add(new RowDefinition { Height=new GridLength(64) });
         root.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
 
-        var top=new Border { Background=T("#FFFFFF","#1B1C1E"),
-            BorderBrush=T("#E7E7E5","#35373A"),BorderThickness=new Thickness(0,0,0,1) };
+        var top=new Border { Background=T("#FFFFFF","#1D1F22"),
+            BorderBrush=T("#E6E7E4","#35383C"),BorderThickness=new Thickness(0,0,0,1) };
         var topGrid=new Grid { Margin=new Thickness(22,0,14,0) };
         topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
@@ -174,19 +196,19 @@ internal static partial class Desktop {
         topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
         var brand=new StackPanel { Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center };
         brand.Children.Add(AppMark(32));
-        var brandText=Text("CapsWriter",15,"#1C1D1F","#F4F4F2",true);
+        var brandText=Text("CapsWriter",15,"#1D1F22","#F1F2F0",true);
         brandText.Margin=new Thickness(11,0,0,0);brand.Children.Add(brandText);
         topGrid.Children.Add(brand);
-        var badge=new Border { Background=T("#F2F3F1","#2A2C2F"),
+        var badge=new Border { Background=T("#F0F1EE","#2C2F32"),
             CornerRadius=new CornerRadius(12),Padding=new Thickness(10,5,11,5),
             VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,11,0) };
         var badgeRow=new StackPanel { Orientation=Orientation.Horizontal };
-        sideDot=new Ellipse { Width=7,Height=7,Fill=B("#A7AAAC"),
+        sideDot=new Ellipse { Width=7,Height=7,Fill=B("#A9ACAF"),
             VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,6,0) };
         badgeRow.Children.Add(sideDot);
-        sideStatus=Text("连接中",11,"#545659","#C4C6C7",true);badgeRow.Children.Add(sideStatus);
+        sideStatus=Text("连接中",11,"#5A5D62","#C7C9C8",true);badgeRow.Children.Add(sideStatus);
         badge.Child=badgeRow;Grid.SetColumn(badge,1);topGrid.Children.Add(badge);
-        themeButton=ThemeButton("", "#F2F3F1","#2A2C2F","#303235","#E6E7E6",8);
+        themeButton=ThemeButton("", "#F0F1EE","#2C2F32","#3A3D41","#E8E9E7",8);
         themeButton.Width=84;themeButton.Height=32;themeButton.FontSize=11;
         themeButton.Margin=new Thickness(0,0,8,0);
         themeButton.Click+=(s,e)=>{darkTheme=!darkTheme;ApplyTheme();SaveUiPrefs();};
@@ -194,12 +216,12 @@ internal static partial class Desktop {
         Grid.SetColumn(themeButton,2);topGrid.Children.Add(themeButton);
         ApplyTheme();
         var windowButtons=new StackPanel { Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center };
-        var minimize=ThemeButton("−","#FFFFFF","#1B1C1E","#55575B","#BFC1C2",8);
+        var minimize=ThemeButton("−","#FFFFFF","#1D1F22","#63666A","#C9CBC9",8);
         minimize.Width=34;minimize.Height=32;minimize.FontSize=18;
         minimize.Click+=(s,e)=>main.WindowState=WindowState.Minimized;
         System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(minimize,true);
         windowButtons.Children.Add(minimize);
-        var close=ThemeButton("×","#FFFFFF","#1B1C1E","#55575B","#BFC1C2",8);
+        var close=ThemeButton("×","#FFFFFF","#1D1F22","#63666A","#C9CBC9",8);
         close.Width=34;close.Height=32;close.FontSize=18;
         close.Click+=(s,e)=>main.Hide();
         System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(close,true);
@@ -212,19 +234,19 @@ internal static partial class Desktop {
             HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled };
         scroll.Resources[typeof(ScrollBar)]=SlimScrollBar();
         var body=new StackPanel { Margin=new Thickness(24,20,24,20) };
-        body.Children.Add(Text("语音输入",23,"#1B1C1E","#F3F3F1",true));
-        var intro=Text("按住 CapsLock，或点击浮窗录音。文字会输入当前应用。",12,"#77797C","#A4A6A8");
+        body.Children.Add(Text("语音输入",23,"#1D1F22","#F1F2F0",true));
+        var intro=Text("按住 CapsLock，或点击浮窗录音。文字会输入当前应用。",12,"#7A7E83","#A2A5A9");
         intro.Margin=new Thickness(0,4,0,17);body.Children.Add(intro);
 
         var recorder=new Grid();
         recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
         var recorderText=new StackPanel { VerticalAlignment=VerticalAlignment.Center };
-        status=Text("准备开始",19,"#1B1C1E","#F3F3F1",true);recorderText.Children.Add(status);
-        heroHint=Text("正在连接服务器…",11,"#7A7C7F","#A7A9AB");
+        status=Text("准备开始",19,"#1D1F22","#F1F2F0",true);recorderText.Children.Add(status);
+        heroHint=Text("正在连接服务器…",11,"#7A7E83","#A2A5A9");
         heroHint.Margin=new Thickness(0,6,15,0);heroHint.TextWrapping=TextWrapping.Wrap;
         recorderText.Children.Add(heroHint);recorder.Children.Add(recorderText);
-        mainRecord=ThemeButton("●  开始录音","#222326","#F0F0EE","#FFFFFF","#1C1D1E",10);
+        mainRecord=ThemeButton("●  开始录音","#26282B","#EDEEEC","#FFFFFF","#1D1F22",10);
         mainRecord.Width=138;mainRecord.Height=42;mainRecord.VerticalAlignment=VerticalAlignment.Center;
         mainRecord.Click+=(s,e)=>{
             bool start=!recording;
@@ -234,28 +256,28 @@ internal static partial class Desktop {
         body.Children.Add(Surface(recorder,20));
 
         var modePanel=new StackPanel();
-        modePanel.Children.Add(Text("输入方式",13,"#333538","#E6E7E6",true));
+        modePanel.Children.Add(Text("输入方式",13,"#33363A","#E7E8E6",true));
         var modeRow=new StackPanel { Orientation=Orientation.Horizontal,
             Margin=new Thickness(0,10,0,0) };
-        liveModeButton=ThemeButton("边说边写","#222326","#F0F0EE","#FFFFFF","#1C1D1E",9);
+        liveModeButton=ThemeButton("边说边写","#26282B","#EDEEEC","#FFFFFF","#1D1F22",9);
         liveModeButton.Width=116;liveModeButton.Height=36;
         liveModeButton.Click+=(s,e)=>SelectMode(true);
         modeRow.Children.Add(liveModeButton);
-        batchModeButton=ThemeButton("录完再写","#F1F2F0","#303235","#4A4C4F","#D1D3D3",9);
+        batchModeButton=ThemeButton("录完再写","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",9);
         batchModeButton.Width=116;batchModeButton.Height=36;
         batchModeButton.Margin=new Thickness(8,0,0,0);
         batchModeButton.Click+=(s,e)=>SelectMode(false);
         modeRow.Children.Add(batchModeButton);
         modePanel.Children.Add(modeRow);
-        modeHint=Text("",11,"#77797C","#A4A6A8");
+        modeHint=Text("",11,"#7A7E83","#A2A5A9");
         modeHint.Margin=new Thickness(0,8,0,0);
         modePanel.Children.Add(modeHint);
         UpdateModeButtons();
         body.Children.Add(Surface(modePanel,19));
 
         var result=new StackPanel();
-        result.Children.Add(Text("识别文字",13,"#333538","#E6E7E6",true));
-        transcript=Text("等待录音。你说的话会出现在这里。",14,"#787A7D","#B6B8BA");
+        result.Children.Add(Text("识别文字",13,"#33363A","#E7E8E6",true));
+        transcript=Text("等待录音。你说的话会出现在这里。",14,"#5A5D62","#B9BBBD");
         transcript.TextWrapping=TextWrapping.Wrap;transcript.MaxHeight=80;
         transcript.Margin=new Thickness(0,10,0,2);result.Children.Add(transcript);
         body.Children.Add(Surface(result,19));
@@ -264,13 +286,13 @@ internal static partial class Desktop {
         var serverHeading=new Grid();
         serverHeading.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         serverHeading.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        serverHeading.Children.Add(Text("服务器",13,"#333538","#E6E7E6",true));
+        serverHeading.Children.Add(Text("服务器",13,"#33363A","#E7E8E6",true));
         var serverActions=new StackPanel { Orientation=Orientation.Horizontal };
-        var restart=ThemeButton("重新连接","#F1F2F0","#303235","#4A4C4F","#D1D3D3",8);
+        var restart=ThemeButton("重新连接","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",8);
         restart.Width=88;restart.Height=30;restart.FontSize=11;
         restart.Click+=(s,e)=>{ if(RestartBackend()) status.Text="正在重新连接"; else status.Text="已取消重启：客户端恢复未确认"; };
         serverActions.Children.Add(restart);
-        var test=ThemeButton("测试连接","#F1F2F0","#303235","#4A4C4F","#D1D3D3",8);
+        var test=ThemeButton("测试连接","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",8);
         test.Width=88;test.Height=30;test.FontSize=11;test.Margin=new Thickness(8,0,0,0);
         test.Click+=(s,e)=>{
             if(!SaveSettings(false))return;
@@ -282,11 +304,11 @@ internal static partial class Desktop {
         server.Children.Add(serverHeading);
 
         var serverModeRow=new StackPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(0,12,0,0) };
-        lanModeButton=ThemeButton("局域网","#222326","#F0F0EE","#FFFFFF","#1C1D1E",9);
+        lanModeButton=ThemeButton("局域网","#26282B","#EDEEEC","#FFFFFF","#1D1F22",9);
         lanModeButton.Width=92;lanModeButton.Height=34;
         lanModeButton.Click+=(s,e)=>SelectServerMode(false);
         serverModeRow.Children.Add(lanModeButton);
-        remoteModeButton=ThemeButton("远程 wss","#F1F2F0","#303235","#4A4C4F","#D1D3D3",9);
+        remoteModeButton=ThemeButton("远程 wss","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",9);
         remoteModeButton.Width=92;remoteModeButton.Height=34;remoteModeButton.Margin=new Thickness(8,0,0,0);
         remoteModeButton.Click+=(s,e)=>SelectServerMode(true);
         serverModeRow.Children.Add(remoteModeButton);
@@ -298,14 +320,14 @@ internal static partial class Desktop {
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
         var addrCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
-        addrCol.Children.Add(Text("地址",11,"#747679","#A7A9AB"));
+        addrCol.Children.Add(Text("地址",11,"#7A7E83","#A2A5A9"));
         host=Field();host.Margin=new Thickness(0,5,0,0);addrCol.Children.Add(host);
         fields.Children.Add(addrCol);
         var portCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
-        portCol.Children.Add(Text("端口",11,"#747679","#A7A9AB"));
+        portCol.Children.Add(Text("端口",11,"#7A7E83","#A2A5A9"));
         port=Field();port.Margin=new Thickness(0,5,0,0);portCol.Children.Add(port);
         Grid.SetColumn(portCol,1);fields.Children.Add(portCol);
-        var save=ThemeButton("保存","#222326","#F0F0EE","#FFFFFF","#1C1D1E",9);
+        var save=ThemeButton("保存","#26282B","#EDEEEC","#FFFFFF","#1D1F22",9);
         save.Width=76;save.Height=42;save.VerticalAlignment=VerticalAlignment.Bottom;
         save.Click+=(s,e)=>SaveSettings(true);
         Grid.SetColumn(save,2);fields.Children.Add(save);
@@ -319,39 +341,39 @@ internal static partial class Desktop {
         remoteGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         remoteGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
         var urlCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
-        urlCol.Children.Add(Text("远程地址",11,"#747679","#A7A9AB"));
+        urlCol.Children.Add(Text("远程地址",11,"#7A7E83","#A2A5A9"));
         urlField=Field();urlField.Margin=new Thickness(0,5,0,0);
         urlField.ToolTip="完整的 wss:// 服务地址，例如 wss://voice.example.com";
         urlCol.Children.Add(urlField);
         remoteGrid.Children.Add(urlCol);
         var keyCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
-        keyCol.Children.Add(Text("部署面板 API Key",11,"#747679","#A7A9AB"));
-        apiKeyField=new PasswordBox { Height=42,FontSize=14,Foreground=T("#202123","#F1F1EF"),
-            Background=T("#FAFAF9","#242527"),BorderBrush=T("#DCDDDC","#45474A"),BorderThickness=new Thickness(1),
+        keyCol.Children.Add(Text("部署面板 API Key",11,"#7A7E83","#A2A5A9"));
+        apiKeyField=new PasswordBox { Height=42,FontSize=14,Foreground=T("#202226","#F0F1EF"),
+            Background=T("#FBFBFA","#232529"),BorderBrush=T("#D8DAD6","#484B50"),BorderThickness=new Thickness(1),
             Padding=new Thickness(11,9,11,7),VerticalContentAlignment=VerticalAlignment.Center };
         apiKeyField.Margin=new Thickness(0,5,0,0);
         keyCol.Children.Add(apiKeyField);
         Grid.SetColumn(keyCol,1);remoteGrid.Children.Add(keyCol);
-        var saveRemote=ThemeButton("保存","#222326","#F0F0EE","#FFFFFF","#1C1D1E",9);
+        var saveRemote=ThemeButton("保存","#26282B","#EDEEEC","#FFFFFF","#1D1F22",9);
         saveRemote.Width=76;saveRemote.Height=42;saveRemote.VerticalAlignment=VerticalAlignment.Bottom;
         saveRemote.Click+=(s,e)=>SaveSettings(true);
         Grid.SetColumn(saveRemote,2);remoteGrid.Children.Add(saveRemote);
         remotePanel.Children.Add(remoteGrid);
-        apiKeyHint=Text("Key 以当前 Windows 用户加密保存，不会写入配置或日志；便携包复制到新电脑需重新录入。",11,"#85878A","#A7A9AB");
+        apiKeyHint=Text("Key 以当前 Windows 用户加密保存，不会写入配置或日志；便携包复制到新电脑需重新录入。",11,"#7A7E83","#A2A5A9");
         apiKeyHint.TextWrapping=TextWrapping.Wrap;apiKeyHint.Margin=new Thickness(0,8,0,0);
         remotePanel.Children.Add(apiKeyHint);
         remoteFields=remotePanel;
         remoteFields.Visibility=Visibility.Collapsed;
         server.Children.Add(remoteFields);
 
-        serverHint=Text("",11,"#85878A","#A7A9AB");
+        serverHint=Text("",11,"#7A7E83","#A2A5A9");
         serverHint.TextWrapping=TextWrapping.Wrap;serverHint.Margin=new Thickness(0,8,0,0);
         server.Children.Add(serverHint);
         body.Children.Add(Surface(server,19));
         body.Children.Add(UpdateSection());
 
         var appearance=new StackPanel();
-        appearance.Children.Add(Text("浮窗",13,"#333538","#E6E7E6",true));
+        appearance.Children.Add(Text("浮窗",13,"#33363A","#E7E8E6",true));
         showFloat=Switch("显示浮窗");showFloat.Margin=new Thickness(0,12,0,0);
         showFloat.Checked+=(s,e)=>{if(floatWindow!=null)floatWindow.Show();};
         showFloat.Unchecked+=(s,e)=>{if(floatWindow!=null)floatWindow.Hide();};
@@ -360,29 +382,29 @@ internal static partial class Desktop {
         glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(90) });
         glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(42) });
-        glassRow.Children.Add(Text("背景浓度",11,"#747679","#A7A9AB"));
+        glassRow.Children.Add(Text("背景浓度",11,"#7A7E83","#A2A5A9"));
         glassSlider=new Slider { Minimum=0,Maximum=100,Value=glassStrength,
             VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,12,0),
             TickFrequency=5,IsSnapToTickEnabled=true };
         glassSlider.ValueChanged+=(s,e)=>{glassStrength=glassSlider.Value;ApplyGlass();SaveUiPrefs();};
         Grid.SetColumn(glassSlider,1);glassRow.Children.Add(glassSlider);
-        glassValue=Text("",11,"#66686B","#BABCBF");
+        glassValue=Text("",11,"#5A5D62","#C7C9C8");
         Grid.SetColumn(glassValue,2);glassRow.Children.Add(glassValue);
         appearance.Children.Add(glassRow);
         body.Children.Add(Surface(appearance,19));
 
         var advancedPanel=new StackPanel { Margin=new Thickness(0,4,0,2) };
         var secondsCol=new StackPanel { Width=145 };
-        secondsCol.Children.Add(Text("停顿判定（秒）",11,"#747679","#A7A9AB"));
+        secondsCol.Children.Add(Text("停顿判定（秒）",11,"#7A7E83","#A2A5A9"));
         seconds=Field();seconds.Margin=new Thickness(0,5,0,0);secondsCol.Children.Add(seconds);
         pauseSetting=secondsCol;advancedPanel.Children.Add(secondsCol);
         advancedPanel.Children.Add(ShortcutSettingsPanel());
         var contextCol=new StackPanel { Margin=new Thickness(0,12,0,0) };
-        contextCol.Children.Add(Text("识别提示词（可选）",11,"#747679","#A7A9AB"));
+        contextCol.Children.Add(Text("识别提示词（可选）",11,"#7A7E83","#A2A5A9"));
         contextWords=Field();contextWords.Margin=new Thickness(0,5,0,0);
         contextWords.ToolTip="例如人名、产品名和专业术语。它会提示识别模型，但不会强制替换结果。";
         contextCol.Children.Add(contextWords);
-        var contextHelp=Text("给模型提供易听错的词语线索，不会强制改写识别结果。",11,"#85878A","#A7A9AB");
+        var contextHelp=Text("给模型提供易听错的词语线索，不会强制改写识别结果。",11,"#7A7E83","#A2A5A9");
         contextHelp.Margin=new Thickness(0,6,0,0);contextCol.Children.Add(contextHelp);
         advancedPanel.Children.Add(contextCol);
         body.Children.Add(Disclosure("识别与快捷键设置",advancedPanel));
@@ -390,7 +412,7 @@ internal static partial class Desktop {
         logBox=new TextBox { Height=112,Margin=new Thickness(0,2,0,3),IsReadOnly=true,
             TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,
-            Background=T("#F6F6F4","#242527"),Foreground=T("#57595C","#BEC0C1"),
+            Background=T("#F5F6F4","#232529"),Foreground=T("#5C5F63","#C0C2C4"),
             BorderThickness=new Thickness(0),Padding=new Thickness(9),
             FontFamily=new FontFamily("Consolas"),FontSize=11 };
         body.Children.Add(Disclosure("运行记录",logBox));
@@ -654,10 +676,10 @@ internal static partial class Desktop {
     }
     static void UpdateServerModeButtons() {
         if (lanModeButton==null || remoteModeButton==null) return;
-        lanModeButton.Background=remoteMode?T("#F1F2F0","#303235"):T("#222326","#F0F0EE");
-        lanModeButton.Foreground=remoteMode?T("#4A4C4F","#D1D3D3"):T("#FFFFFF","#1C1D1E");
-        remoteModeButton.Background=remoteMode?T("#222326","#F0F0EE"):T("#F1F2F0","#303235");
-        remoteModeButton.Foreground=remoteMode?T("#FFFFFF","#1C1D1E"):T("#4A4C4F","#D1D3D3");
+        lanModeButton.Background=remoteMode?T("#F0F1EE","#2E3134"):T("#26282B","#EDEEEC");
+        lanModeButton.Foreground=remoteMode?T("#5A5D62","#C7C9C8"):T("#FFFFFF","#1D1F22");
+        remoteModeButton.Background=remoteMode?T("#26282B","#EDEEEC"):T("#F0F1EE","#2E3134");
+        remoteModeButton.Foreground=remoteMode?T("#FFFFFF","#1D1F22"):T("#5A5D62","#C7C9C8");
         if (lanFields!=null) lanFields.Visibility=remoteMode?Visibility.Collapsed:Visibility.Visible;
         if (remoteFields!=null) remoteFields.Visibility=remoteMode?Visibility.Visible:Visibility.Collapsed;
         if (serverHint!=null) serverHint.Text=remoteMode?
@@ -991,13 +1013,13 @@ internal static partial class Desktop {
             connected?"连接到 "+ServerDisplay()+"  ·  "+ShortcutHint():
             "正在连接 "+ServerDisplay();
         sideStatus.Text=recording?"正在录音":connected?"服务已连接":"尚未连接";
-        sideDot.Fill=B(recording?"#E76C70":connected?"#6DB890":"#A7AAAC");
+        sideDot.Fill=B(recording?"#D96A64":connected?"#5FA982":"#A9ACAF");
         bool floatReady=alive&&connected;
-        var floatIndicator=B(recording?"#EA6867":floatReady?"#63BD89":"#E29A4B");
+        var floatIndicator=B(recording?"#D96A64":floatReady?"#5FA982":"#D99A4E");
         floatConnectionDot.Fill=floatIndicator;
         floatConnectionDot.ToolTip=recording?"正在录音":
             floatReady?"已连接":"未连接服务器";
-        floatOuter.BorderBrush=floatReady?T("#55FFFFFF","#44FFFFFF"):B("#D99043");
+        floatOuter.BorderBrush=floatReady?T("#55FFFFFF","#44FFFFFF"):B("#D99A4E");
         floatStatus.Text=recording?(DateTime.Now-started).ToString(@"mm\:ss"):
             processing?"识别中":"";
         floatDetail.Text=lastText.Length>0?
@@ -1013,8 +1035,8 @@ internal static partial class Desktop {
         compactRecord.ToolTip=recording?"点击结束录音":
             floatReady?"点击开始录音":"未连接服务器";
         UpdateWaveAnimation();
-        mainRecord.Background=recording?T("#FCE8E8","#6A3236"):T("#222326","#F0F0EE");
-        mainRecord.Foreground=recording?T("#A93D44","#FFFFFF"):T("#FFFFFF","#1C1D1E");
+        mainRecord.Background=recording?T("#F3E3E1","#5A3A3C"):T("#26282B","#EDEEEC");
+        mainRecord.Foreground=recording?T("#9E4038","#F4E4E2"):T("#FFFFFF","#1D1F22");
         mainRecord.IsEnabled=floatRecord.IsEnabled=compactRecord.IsEnabled=alive&&connected;
         tray.Text=recording?"CapsWriter · 正在录音":"CapsWriter · "+(connected?"已连接":"未连接");
     }
