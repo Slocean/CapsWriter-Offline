@@ -67,10 +67,10 @@ internal static partial class Desktop {
 
     // ---- 界面 -----------------------------------------------------------
 
+    // 返回 Disclosure 折叠区的内容（标题由 Disclosure 头提供）
     static UIElement UpdateSection() {
         var panel = new StackPanel();
-        panel.Children.Add(SectionTitle("软件更新"));
-        var row = new Grid { Margin = new Thickness(0, 12, 0, 0) };
+        var row = new Grid { Margin = new Thickness(0, 2, 0, 0) };
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
@@ -90,7 +90,7 @@ internal static partial class Desktop {
         Grid.SetColumn(updateButton, 1);
         row.Children.Add(updateButton);
         panel.Children.Add(row);
-        return Surface(panel, 19);
+        return panel;
     }
 
     static void SetUpdateStatus(string message) {
@@ -253,11 +253,67 @@ internal static partial class Desktop {
         });
     }
 
+    // 更新退出闸门（UI 线程执行）：仅当 Exit() 确认（录音已结束、输出静音
+    // 已恢复、后台客户端已终止）才允许 Application.Shutdown；未确认时取消
+    // 本次更新并保持界面打开——绝不无条件关闭主界面。
+    static bool ExitForUpdate() {
+        if (!Exit()) {
+            SetUpdateBusy(false);
+            SetUpdateStatus("已取消更新：客户端退出握手未确认（录音或输出恢复未完成），界面保持打开。");
+            AppendLog("更新已取消：客户端退出握手未确认，未执行更新。");
+            return false;
+        }
+        Application.Current.Shutdown();
+        return true;
+    }
+
     // Exit() 关闭窗口/托盘并结束自己的后台客户端，必须在 UI 线程执行。
-    static void ExitViaDispatcher() {
+    // 返回 false = 退出握手未确认：不 Shutdown，界面保持打开。
+    static bool ExitViaDispatcher() {
+        return (bool)main.Dispatcher.Invoke(new Func<bool>(ExitForUpdate));
+    }
+
+    // 等待 wrapper 完成早期校验+备份并写入 READY 协议行（无时间戳前缀，
+    // 且必须携带本次事务 id——旧结果文件里遗留的 READY 不可能被误认）。
+    // 期间界面保持打开；wrapper 提前退出（无 READY）或超时都返回 false。
+    static bool WaitForWrapperReady(Process wrapper, string resultPath, string txId, int timeoutMs) {
+        int deadline = Environment.TickCount + timeoutMs;
+        while (Environment.TickCount < deadline) {
+            try { if (wrapper.HasExited) return false; } catch { return false; }
+            try {
+                if (File.Exists(resultPath)) {
+                    foreach (string line in File.ReadAllLines(resultPath, Encoding.UTF8)) {
+                        string trimmed = line.Trim();
+                        if (!trimmed.StartsWith("READY", StringComparison.Ordinal)) continue;   // 带时间戳的普通日志行
+                        string rest = trimmed.Length > 5 ? trimmed.Substring(5).Trim() : "";
+                        if (txId.Length == 0 || rest == txId) return true;
+                    }
+                }
+            } catch (IOException) { }   // wrapper 正在重写结果文件，读到半截忽略
+            catch (UnauthorizedAccessException) { }
+            Thread.Sleep(250);
+        }
+        return false;
+    }
+
+    // 在结果文件补写一条终态 RESULT 行（中止/取消时 wrapper 已被杀掉，不再
+    // 有写入方），让结果文件在任何路径下都以终态收尾，重启后的 GUI 读取时
+    // 不会看到"无终态"的半截日志。
+    static void AppendLocalResultLine(string resultPath, string reason) {
+        try {
+            File.AppendAllText(resultPath,
+                "RESULT: FAILED: " + reason + "\r\n", Encoding.UTF8);
+        } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+
+    // 更新中止（GUI 侧）：杀掉仍在等待 GUI 退出的 wrapper，恢复按钮可用，
+    // 在界面与运行记录里给出诊断——不关闭界面。
+    static void AbortUpdateOnUi(Process wrapper, string reason) {
+        try { if (wrapper != null && !wrapper.HasExited) wrapper.Kill(); } catch { }
         main.Dispatcher.Invoke(new Action(delegate {
-            Exit();
-            Application.Current.Shutdown();
+            SetUpdateBusy(false);
+            SetUpdateStatus(reason);
+            AppendLog(reason);
         }));
     }
 
@@ -273,31 +329,129 @@ internal static partial class Desktop {
             UseShellExecute = false, CreateNoWindow = true
         };
         Process.Start(psi);
+        // 握手未确认（Exit() false）时界面保持打开，启动器等待 PID 超时后
+        // 自行放弃并回滚；确认后才 Shutdown。
         ExitViaDispatcher();
     }
 
-    // 安装版：交给 update-setup-wrapper.ps1——等待本进程退出（超时放弃更新）、
-    // 静默运行新安装包（Inno 沿用上次安装目录并在失败时自动还原被替换文件）、
-    // 检查安装退出码，成功才从原安装目录重启应用；结果写入
-    // update-setup-result.txt 供诊断。
+    // 安装版：交给 update-setup-wrapper.ps1——wrapper 先做早期校验并备份
+    // 当前安装目录，写入带本次事务 id 的 READY 后 GUI 才退出；随后静默安装
+    // （显式 /DIR 指向当前安装目录）、校验、从原目录重启；所有失败路径恢复
+    // 旧版、重启并写 update-setup-result.txt（RESULT 行，重启后的 GUI 会
+    // 展示诊断）。
+    // 根因修复（2.6.2/2.6.3 热更新"界面关闭后无响应"）：BaseDirectory 恒以
+    // 反斜杠结尾，直接拼进引号参数时尾反斜杠转义闭合引号，CRT 把 -ResultPath
+    // 吞进 -AppDir 单 token，wrapper 在参数绑定阶段就退出——这里把末尾反斜杠
+    // 翻倍保证字面传递，并改用 System32 绝对路径启动 PowerShell（不受 PATH
+    // 影响）。
+    // 事务身份：-TxId 每次随机生成，wrapper 的 READY 行必须携带同一 id 才被
+    // 视为本次事务的就绪信号。
     static void ApplySetupUpdate(UpdateInfo info, string downloadPath) {
-        SetStatusThreadSafe("正在等待界面退出并启动安装程序…");
+        SetStatusThreadSafe("正在准备更新事务（校验脚本并备份当前安装）…");
         string wrapper = Path.Combine(Dir, "update-setup-wrapper.ps1");
         if (!File.Exists(wrapper))
             throw new InvalidOperationException("缺少更新辅助脚本 update-setup-wrapper.ps1。");
         string resultPath = Path.Combine(Dir, "update-setup-result.txt");
         try { File.Delete(resultPath); } catch { }
         int pid = Process.GetCurrentProcess().Id;
-        var psi = new ProcessStartInfo("powershell.exe") {
+        string txId = Guid.NewGuid().ToString("N");
+        string appDirArg = Dir.EndsWith("\\") ? Dir + "\\" : Dir;   // 尾反斜杠翻倍防转义闭合引号
+        var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory,
+            "WindowsPowerShell", "v1.0", "powershell.exe")) {
             Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + wrapper + "\""
                 + " -SetupPath \"" + downloadPath + "\""
                 + " -GuiPid " + pid
-                + " -AppDir \"" + Dir + "\""
-                + " -ResultPath \"" + resultPath + "\"",
+                + " -AppDir \"" + appDirArg + "\""
+                + " -ResultPath \"" + resultPath + "\""
+                + " -TxId " + txId,
             UseShellExecute = false, CreateNoWindow = true
         };
-        Process.Start(psi);
-        ExitViaDispatcher();
+        Process wrapperProc = Process.Start(psi);
+        if (wrapperProc == null)
+            throw new InvalidOperationException("无法启动 PowerShell 更新辅助进程。");
+        // 界面保持打开，直到 wrapper 完成早期校验+备份并写入带本事务 id 的
+        // READY；失败/超时都在这里中止并给出诊断，绝不无提示关闭界面。
+        if (!WaitForWrapperReady(wrapperProc, resultPath, txId, 300000)) {
+            bool killed = false;
+            try { if (!wrapperProc.HasExited) { wrapperProc.Kill(); killed = true; } } catch { }
+            if (killed) AppendLocalResultLine(resultPath,
+                "wrapper did not reach READY in time; aborted by GUI; outcome: old install untouched");
+            AbortUpdateOnUi(wrapperProc, "更新已中止：更新辅助脚本未完成准备（详见运行记录），界面保持打开。");
+            return;
+        }
+        SetStatusThreadSafe("更新准备完成，正在退出界面并应用更新…");
+        bool exited = (bool)main.Dispatcher.Invoke(new Func<bool>(ExitForUpdate));
+        if (!exited) {
+            // 退出握手未确认：取消更新，杀掉等待 GUI 退出的 wrapper（它的
+            // 等待超时兜底会写入同样的失败终态），补写终态行，界面保持打开。
+            try { if (!wrapperProc.HasExited) wrapperProc.Kill(); } catch { }
+            AppendLocalResultLine(resultPath,
+                "update cancelled before install (exit handshake unconfirmed; wrapper stopped); outcome: old install untouched");
+        }
+    }
+
+    // 展示上一次更新事务的诊断（wrapper 恢复/重启 GUI 后，用户能看到结果）。
+    // RESULT 行由 wrapper 在健康检查/恢复之后（重启 GUI 数秒前后）才写入；
+    // 且结果文件可能正被写入方短暂独占——单次读取失败或单次"无终态"都不
+    // 代表结束，在后台线程按轮询重试（每轮独立捕获共享冲突，不因一次
+    // IOException 放弃），最多 20 秒；文件超过 30 分钟按过期处理。
+    // 失败提示必须按 wrapper 写入的真实 outcome 区分（恢复成功/恢复未完成/
+    // 旧版未受影响），绝不臆断"已恢复旧版本并重启"。
+    static void CheckLastUpdateResult() {
+        ThreadPool.QueueUserWorkItem(delegate {
+            try {
+                string path = Path.Combine(Dir, "update-setup-result.txt");
+                string text = null;
+                bool fresh = false;
+                for (int attempt = 0; attempt < 41; attempt++) {
+                    try {
+                        var file = new FileInfo(path);
+                        if (!file.Exists) { if (attempt > 0) break; }
+                        else {
+                            fresh = (DateTime.UtcNow - file.LastWriteTimeUtc).TotalMinutes <= 30;
+                            if (!fresh) break;
+                            text = File.ReadAllText(path, Encoding.UTF8);
+                            if (text.IndexOf("RESULT:", StringComparison.Ordinal) >= 0) break;
+                        }
+                    } catch (IOException) { text = null; }   // 写入方占用中：本轮放弃，下一轮重试
+                    catch (UnauthorizedAccessException) { text = null; }
+                    Thread.Sleep(500);
+                }
+                if (text == null || !fresh) return;
+                string resultLine = null;
+                foreach (string raw in text.Split('\n')) {
+                    string trimmed = raw.Trim();
+                    if (trimmed.StartsWith("RESULT:", StringComparison.Ordinal)) resultLine = trimmed;
+                }
+                if (resultLine == null) {
+                    main.Dispatcher.BeginInvoke(new Action(delegate {
+                        AppendLog("上次更新事务日志（无终态结果行，事务可能被中断）：" + Environment.NewLine + text);
+                        SetUpdateStatus("上次更新事务未写入终态结果（可能被中断）；详见运行记录。");
+                    }));
+                    return;
+                }
+                bool ok = resultLine.StartsWith("RESULT: OK", StringComparison.Ordinal);
+                string combined = resultLine;
+                main.Dispatcher.BeginInvoke(new Action(delegate {
+                    AppendLog("上次更新事务日志：" + Environment.NewLine + text);
+                    if (ok) {
+                        SetUpdateStatus("上次更新已完成，程序已从新版本重启。");
+                        return;
+                    }
+                    // 失败原因 + wrapper 恢复结果（旧版 wrapper 无 outcome 段时按原文提示）
+                    string status;
+                    if (combined.Contains("recovery incomplete"))
+                        status = "上次更新失败：恢复未完成，安装目录旁保留了 .update-backup 备份，需要手动处理；详见运行记录。";
+                    else if (combined.Contains("old version restored and restarted"))
+                        status = "上次更新失败：已恢复旧版本并重启；详见运行记录。";
+                    else if (combined.Contains("old install untouched"))
+                        status = "上次更新失败：旧版本未受影响，安装文件未改动；详见运行记录。";
+                    else
+                        status = "上次更新失败：" + ShortError(combined.Substring(7)) + "；详见运行记录。";
+                    SetUpdateStatus(status);
+                }));
+            } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        });
     }
 
     static void SetStatusThreadSafe(string message) {

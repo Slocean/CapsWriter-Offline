@@ -7,6 +7,8 @@ UDP 控制模块
 命令协议：
 - START: 开始录音
 - STOP: 停止录音
+- STATE: 只读状态快照（STATE|recording=<0/1>|connected=<0/1>），
+  供桌面端接入已运行客户端时同步真实录音/连接状态
 """
 
 from __future__ import annotations
@@ -129,6 +131,18 @@ class UDPController:
             # 无论是否在录音都回执 STOPPED：录音中的路径在 finish() 同步
             # 完成输出静音恢复之后才会执行到这里，回执即证明恢复已完成。
             self._reply(addr, b'STOPPED')
+
+        elif command == 'STATE':
+            # 只读状态快照：桌面端接入已运行客户端时同步真实录音/连接
+            # 状态，不依赖历史日志回放（协议只读，不改变任何状态）。
+            # started 为录音开始的 Unix 秒时间戳（未录音为 0）。
+            ws = getattr(self.manager.app, 'ws', None)
+            ws_connected = bool(getattr(ws, 'is_connected', False))
+            self._reply(addr, ("STATE|recording=%d|connected=%d|started=%d"
+                               % (1 if state.recording else 0,
+                                  1 if ws_connected else 0,
+                                  int(getattr(state, 'recording_start_time', 0.0) or 0))
+                               ).encode('ascii'))
 
         elif command == 'PREPARE_SHUTDOWN' or command.startswith('PREPARE_SHUTDOWN|'):
             self._handle_prepare_shutdown(command, addr)

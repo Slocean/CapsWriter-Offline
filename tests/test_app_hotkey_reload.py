@@ -156,8 +156,80 @@ class _FakeNativeListener:
         return self._alive
 
 
+class _FakeEmulator:
+    """假按键模拟器：只记录调用，绝不触碰真实输入设备。
+
+    事故回归（work/installed-state-incident-20261004）：短按取消路径
+    pool.submit(emulator.emulate_key) 曾用真实 pynput 控制器向 OS 补发
+    CapsLock，触发 A:\\CapsWriter 正在运行的客户端开始录音。
+    """
+
+    def __init__(self):
+        self.keys = []
+        self.clicks = []
+
+    def emulate_key(self, key_name):
+        self.keys.append(key_name)
+
+    def emulate_mouse_click(self, button_name):
+        self.clicks.append(button_name)
+
+    def is_emulating(self, key_name):
+        return False
+
+    def clear_emulating_flag(self, key_name):
+        pass
+
+
+class _FakePool:
+    """同步假线程池：submit 立即内联执行并记录，无后台线程、无滞留任务，
+    可断言"已排空"。真实 pool 的后台提交（短按补发）在测试中不可控且曾
+    泄漏真实输入——统一替换为内联执行。"""
+
+    def __init__(self, max_workers=None):
+        self.executed = []
+        self._pending = 0
+
+    def submit(self, fn, *args, **kwargs):
+        self._pending += 1
+        try:
+            fn(*args, **kwargs)
+            self.executed.append((getattr(fn, '__name__', str(fn)), args))
+        finally:
+            self._pending -= 1
+        return SimpleNamespace(result=lambda timeout=None: None,
+                               done=lambda: True, running=lambda: False)
+
+    def shutdown(self, wait=True):
+        pass
+
+    def drained(self):
+        return self._pending == 0
+
+
+class _FakeRestoreController:
+    """假恢复控制器：记录 press/release，替代 schedule_restore 的真实
+    pynput 控制器（caps_lock 短按恢复路径的第二条真实输入触点）"""
+
+    def __init__(self):
+        self.press_calls = []
+        self.release_calls = []
+
+    def press(self, key):
+        self.press_calls.append(str(key))
+
+    def release(self, key):
+        self.release_calls.append(str(key))
+
+
 class _ManagerHarness:
-    """ShortcutManager + 静音假后端 + 合成键盘事件（无 OS 钩子）"""
+    """ShortcutManager + 静音假后端 + 合成键盘事件（无 OS 钩子、无真实输入）
+
+    隔离边界（tests/conftest.py fail-closed 防护兜底）：Listener /
+    ShortcutEmulator / ThreadPoolExecutor 全部替换为假实现——短按补发
+    只落到 _FakeEmulator 并被 _FakePool 内联执行；不调用 listener.start()，
+    不安装任何 OS 钩子；事件经真实 create_keyboard_filter() 过滤器驱动。
+    """
 
     VK = {'caps_lock': 0x14, 'ctrl': 0x11, 'alt': 0x12, 'space': 0x20}
 
@@ -174,8 +246,16 @@ class _ManagerHarness:
         self.loop_thread.start()
         self.app = SimpleNamespace(state=self.state, loop=self.loop)
         self.state.app = self.app
-        self.manager = ShortcutManager(self.app, shortcuts,
-                                       hook_registry=_FakeHookRegistry())
+        # 恢复控制器（schedule_restore → do_restore 的真实 pynput 触点）
+        # 在整个 harness 生命周期内替换为记录型假实现
+        self.restores = []
+        restore_cls = self._make_restore_recorder()
+        self._restore_patch = mock.patch('pynput.keyboard.Controller', restore_cls)
+        self._restore_patch.start()
+        with mock.patch.object(sm_module, 'ShortcutEmulator', _FakeEmulator), \
+             mock.patch.object(sm_module, 'ThreadPoolExecutor', _FakePool):
+            self.manager = ShortcutManager(self.app, shortcuts,
+                                           hook_registry=_FakeHookRegistry())
         # 受控假钩子：不调用 listener.start()，不安装任何 OS 钩子；
         # 事件经真实 create_keyboard_filter() 过滤器驱动
         self.manager.start = lambda: None
@@ -185,6 +265,18 @@ class _ManagerHarness:
             task.threshold = 0.3
         self._recorder_patch()
         self.filter = self.manager.create_keyboard_filter()
+        self.emulator = self.manager._emulator
+        self.pool = self.manager._pool
+
+    def _make_restore_recorder(self):
+        recorded = self.restores
+
+        class _Recorder(_FakeRestoreController):
+            def __init__(self):
+                super().__init__()
+                recorded.append(self)
+
+        return _Recorder
 
     def _recorder_patch(self):
         self.manager.control_task._recorder_class = FakeRecorder
@@ -211,10 +303,61 @@ class _ManagerHarness:
                     await asyncio.gather(*pending, return_exceptions=True)
             asyncio.run_coroutine_threadsafe(_drain(), self.loop).result(timeout=3)
         finally:
+            self._restore_patch.stop()
             output_mute_pkg._OWNER = self.owner_prev
             self.loop.call_soon_threadsafe(self.loop.stop)
             self.loop_thread.join(timeout=2)
             self.loop.close()
+
+
+class ShortPressIsolationTests(unittest.TestCase):
+    """事故回归（work/installed-state-incident-20261004）：
+    短按取消的补发只调用假 emulator、不触碰真实输入控制器（真实 pynput
+    被 tests/conftest.py fail-closed 防护拦截），且假池内联同步排空。
+    恢复路径（task.finish → schedule_restore → do_restore）单独用真实
+    finish 驱动并断言只落假恢复控制器——该路径要求 suppress=False
+    （task.finish 的恢复条件是 is_toggle_key() and not shortcut.suppress：
+    阻塞模式按键不进系统，无需恢复）；短按取消用例保持 suppress=True
+    （阻塞模式下客户端补发按键，只落假 emulator，不触真实输入）。
+    """
+
+    def test_short_press_suppress_only_fakes(self):
+        # 短按路径：cancel → 补发 emulator，不经 schedule_restore
+        h = _ManagerHarness([Shortcut(key='caps_lock', hold_mode=True, suppress=True)])
+        try:
+            h.key('caps_lock')
+            self.assertTrue(h.state.recording)
+            h.key('caps_lock', is_up=True)   # 短按松开 → cancel + 补发
+            self.assertFalse(h.state.recording)
+            # 补发只落到假模拟器；真实 pynput Controller 一旦被实例化，
+            # conftest 防护立即抛错使测试失败
+            self.assertEqual(h.emulator.keys, ['caps_lock'])
+            self.assertEqual(h.emulator.clicks, [])
+            self.assertGreaterEqual(len(h.pool.executed), 1)
+            self.assertTrue(h.pool.drained())
+            self.assertEqual(h.restores, [])   # 短按取消不走恢复控制器
+        finally:
+            h.close()
+
+    def test_finish_restore_uses_fake_controller_and_drains(self):
+        # 完整恢复路径：finish → schedule_restore → do_restore → 假控制器。
+        # task.finish 仅在 is_toggle_key() and not shortcut.suppress 时恢复，
+        # 故此处必须 suppress=False（非阻塞模式才需要补发按键恢复状态）。
+        # 用真实已启动的 caps_lock 任务（h.key 启动的是 tasks['caps_lock']，
+        # 不是 control_task）
+        h = _ManagerHarness([Shortcut(key='caps_lock', hold_mode=True, suppress=False)])
+        try:
+            h.key('caps_lock')
+            task = h.manager.tasks['caps_lock']
+            self.assertTrue(task.is_recording)
+            task.finish()   # 真实 finish 路径（长按松开同款）
+            self.assertFalse(task.is_recording)
+            self.assertGreaterEqual(len(h.restores), 1)
+            self.assertEqual(h.restores[0].press_calls, ['Key.caps_lock'])
+            self.assertEqual(h.restores[0].release_calls, ['Key.caps_lock'])
+            self.assertTrue(h.pool.drained())
+        finally:
+            h.close()
 
 
 class FakeHookBindingTests(unittest.TestCase):
@@ -597,9 +740,14 @@ class NativeHookRegistryContractTests(unittest.TestCase):
 
     def _manager_with(self, registry):
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-        from core.client.shortcut.shortcut_manager import ShortcutManager
-        return ShortcutManager(SimpleNamespace(state=ClientState()), [],
-                               hook_registry=registry)
+        from core.client.shortcut import shortcut_manager as sm_module
+        # 全隔离：emulator/pool/恢复控制器一并替换（conftest fail-closed
+        # 防护会拦截真实实例化，ShortcutEmulator.__init__ 会建 pynput 控制器）
+        with mock.patch.object(sm_module, 'ShortcutEmulator', _FakeEmulator), \
+             mock.patch.object(sm_module, 'ThreadPoolExecutor', _FakePool), \
+             mock.patch('pynput.keyboard.Controller', _FakeRestoreController):
+            return ShortcutManager(SimpleNamespace(state=ClientState()), [],
+                                   hook_registry=registry)
 
     def _fake_cls(self, hooks):
         import types

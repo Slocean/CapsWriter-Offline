@@ -34,6 +34,33 @@ class TruncatingFileHandler(RotatingFileHandler):
         self.stream.flush()
 
 
+# 生命周期遥测前缀：桌面端状态机依赖的事件行（task_id 两端可核验）。
+# 经 Logger.telemetry 通道落盘，不受用户 log_level 过滤影响。
+LIFECYCLE_PREFIX = '任务生命周期: '
+
+
+class _LifecyclePassthroughHandler(logging.Handler):
+    """生命周期遥测直通 handler：借用主日志的文件 handler 落盘。
+
+    绕过依据（logging 源码核实）：用户调高 log_level 后，INFO 记录会在
+    Logger.callHandlers 被 logger 级别与文件 handler 级别两道闸拦下；而
+    Handler.handle() 只执行 filter → emit，不检查 handler 级别。本 handler
+    挂在 level=DEBUG、propagate=False 的子 logger 上，命中前缀时直接调用
+    文件 handler 的 handle()——同一文件、同一锁、同一轮转策略，仅放行
+    LIFECYCLE_PREFIX 前缀，INFO 语义，不产生告警。
+    """
+
+    def __init__(self, file_handler):
+        super().__init__(level=logging.DEBUG)
+        self._file_handler = file_handler
+
+    def filter(self, record):
+        return isinstance(record.msg, str) and record.msg.startswith(LIFECYCLE_PREFIX)
+
+    def emit(self, record):
+        self._file_handler.handle(record)
+
+
 class Logger:
     """日志系统管理器"""
 
@@ -156,6 +183,27 @@ class Logger:
             # 之后 core_client.py/core_server.py 会用正确的级别重新初始化
             return cls.setup(name, level='INFO')
         return cls._loggers[name]
+
+    @classmethod
+    def telemetry(cls, name: str):
+        """生命周期遥测通道：INFO 语义、不受用户 log_level 过滤。
+
+        与主日志共用同一 TruncatingFileHandler（同文件同轮转），只放行
+        LIFECYCLE_PREFIX 前缀记录，供桌面端状态机消费；正常识别流不产生
+        WARNING/ERROR 告警。真实失败仍走主 logger 的 ERROR。
+        """
+        base = cls.get_logger(name)
+        child = logging.getLogger((name if name else 'root') + '.lifecycle')
+        for h in child.handlers:
+            if isinstance(h, _LifecyclePassthroughHandler):
+                return child
+        for h in base.handlers:
+            if isinstance(h, TruncatingFileHandler):
+                child.addHandler(_LifecyclePassthroughHandler(h))
+                child.setLevel(logging.DEBUG)
+                child.propagate = False
+                break
+        return child
 
 
 # 便捷函数

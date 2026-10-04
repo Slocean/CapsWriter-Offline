@@ -47,7 +47,28 @@ internal static partial class Desktop {
     static Ellipse sideDot, floatConnectionDot;
     static Button mainRecord, floatRecord;
     static CheckBox showFloat;
-    static bool connected, recording, processing, exiting, ownsBackend, remoteMode;
+    static bool connected, recording, exiting, ownsBackend, remoteMode;
+    // 启动回放分离：GUI 启动/接入时记录日志文件的字节末尾作为历史边界；
+    // 边界之前只展示不塑形，之后全部实时（不用“首批全历史”启发式）。
+    // snapshotSynced：UDP STATE 初始只读快照是否已取得（未取得则 tick 重试）。
+    static bool snapshotSynced;
+    static long replayBoundary;
+    // 启动回放分离：GUI 启动时先读到的既有日志是历史（不塑形实时状态）；
+    // 接入后用 UDP STATE 快照同步真实录音/连接状态
+    // 识别等待 = 真正未完成的识别任务集合（客户端“任务生命周期”事件驱动，
+    // task_id 两端一致）。提交入集；完成/发送失败移除；断线、取消、后端
+    // 退出清空。多段识别各自独立，不会因单个 final 提前熄灯或整体卡住。
+    static readonly System.Collections.Generic.HashSet<string> pendingTasks
+        =new System.Collections.Generic.HashSet<string>();
+    static bool processing { get { return pendingTasks.Count>0; } }
+    // 主窗口双 Tab（语音输入/设置）与识别等待状态灯
+    static Button voiceTabButton, settingsTabButton;
+    static UIElement voicePage, settingsPage;
+    static Ellipse mainStateDot;
+    static System.Windows.Shapes.Path mainSpinner;
+    static RotateTransform mainSpinnerRotate;
+    static DispatcherTimer stateAnimTick;
+    static double stateAnimPhase;
     static bool mainLoaded;                    // 启动装配完成标志：快捷键自动应用仅在装配完成后生效
     static string lastText = "";
     static DateTime started;
@@ -77,8 +98,17 @@ internal static partial class Desktop {
             StartBackend();
             main.Show();
             if (showFloat.IsChecked == true) floatWindow.Show();
+            CheckLastUpdateResult();
             tick = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
-            tick.Tick += (s,e) => { ReadLog(); UpdateDisplay(); };
+            tick.Tick += (s,e) => {
+                ReadLog();
+                // 初始只读快照未同步（UDP 未就绪）时的非阻塞重试：短超时、不拖慢 400ms 节拍
+                if(!snapshotSynced && backend!=null && !backend.HasExited) {
+                    var r=QueryBackend("STATE",80);
+                    if(r!=null) ApplyStateReply(r);
+                }
+                UpdateDisplay();
+            };
             tick.Start();
             ScheduleUpdateAutoCheck();
             app.Run();
@@ -185,6 +215,7 @@ internal static partial class Desktop {
         main.Closing+=(s,e)=>{if(!exiting){e.Cancel=true;main.Hide();}};
         var root=new Grid { Background=T("#F6F7F5","#141517") };
         root.RowDefinitions.Add(new RowDefinition { Height=new GridLength(64) });
+        root.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
 
         var top=new Border { Background=T("#FFFFFF","#1D1F22"),
@@ -230,10 +261,56 @@ internal static partial class Desktop {
         top.Child=topGrid;
         root.Children.Add(top);
 
+        // ===== 顶部 Tab 条：语音输入 / 设置 =====
+        var tabBar=new StackPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(24,14,24,0) };
+        voiceTabButton=ThemeButton("语音输入","#26282B","#EDEEEC","#FFFFFF","#1D1F22",9);
+        voiceTabButton.Width=112;voiceTabButton.Height=38;
+        voiceTabButton.Click+=(s,e)=>SelectMainTab(0);
+        tabBar.Children.Add(voiceTabButton);
+        settingsTabButton=ThemeButton("设置","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",9);
+        settingsTabButton.Width=112;settingsTabButton.Height=38;settingsTabButton.Margin=new Thickness(8,0,0,0);
+        settingsTabButton.Click+=(s,e)=>SelectMainTab(1);
+        tabBar.Children.Add(settingsTabButton);
+        Grid.SetRow(tabBar,1);root.Children.Add(tabBar);
+
+        voicePage=BuildVoicePage();
+        settingsPage=BuildSettingsPage();
+        var pages=new Grid();
+        pages.Children.Add(voicePage);
+        pages.Children.Add(settingsPage);
+        settingsPage.Visibility=Visibility.Collapsed;
+        Grid.SetRow(pages,2);root.Children.Add(pages);
+        // 识别等待动画时钟：60ms 推进呼吸/旋转相位；启停由 UpdateDisplay 按真实状态切换
+        stateAnimTick=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(60) };
+        stateAnimTick.Tick+=(s,e)=>AnimateProcessingState();
+        main.Content=root;
+    }
+
+    // 双 Tab 切换：语音输入页常驻录音/识别文字/运行记录；设置页集中服务器、
+    // 软件更新、浮窗设置、识别与快捷键设置（后三者默认折叠）。
+    static void SelectMainTab(int index) {
+        if(voicePage!=null) voicePage.Visibility=index==0?Visibility.Visible:Visibility.Collapsed;
+        if(settingsPage!=null) settingsPage.Visibility=index==1?Visibility.Visible:Visibility.Collapsed;
+        if(voiceTabButton!=null) {
+            voiceTabButton.Background=index==0?T("#26282B","#EDEEEC"):T("#F0F1EE","#2E3134");
+            voiceTabButton.Foreground=index==0?T("#FFFFFF","#1D1F22"):T("#5A5D62","#C7C9C8");
+        }
+        if(settingsTabButton!=null) {
+            settingsTabButton.Background=index==1?T("#26282B","#EDEEEC"):T("#F0F1EE","#2E3134");
+            settingsTabButton.Foreground=index==1?T("#FFFFFF","#1D1F22"):T("#5A5D62","#C7C9C8");
+        }
+    }
+
+    static ScrollViewer PageScroll(StackPanel body) {
         var scroll=new ScrollViewer { VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled };
         scroll.Resources[typeof(ScrollBar)]=SlimScrollBar();
-        var body=new StackPanel { Margin=new Thickness(24,20,24,20) };
+        scroll.Content=body;
+        return scroll;
+    }
+
+    static UIElement BuildVoicePage() {
+        var body=new StackPanel { Margin=new Thickness(24,16,24,20) };
         body.Children.Add(Text("语音输入",23,"#1D1F22","#F1F2F0",true));
         var intro=Text("按住 CapsLock，或点击浮窗录音。文字会输入当前应用。",12,"#7A7E83","#A2A5A9");
         intro.Margin=new Thickness(0,4,0,17);body.Children.Add(intro);
@@ -242,7 +319,13 @@ internal static partial class Desktop {
         recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
         var recorderText=new StackPanel { VerticalAlignment=VerticalAlignment.Center };
-        status=Text("准备开始",19,"#1D1F22","#F1F2F0",true);recorderText.Children.Add(status);
+        var statusRow=new StackPanel { Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center };
+        mainStateDot=new Ellipse { Width=10,Height=10,Fill=B(IdleHex),VerticalAlignment=VerticalAlignment.Center,
+            ToolTip="未连接" };
+        statusRow.Children.Add(mainStateDot);
+        status=Text("准备开始",19,"#1D1F22","#F1F2F0",true);status.Margin=new Thickness(10,0,0,0);
+        statusRow.Children.Add(status);
+        recorderText.Children.Add(statusRow);
         heroHint=Text("正在连接服务器…",11,"#7A7E83","#A2A5A9");
         heroHint.Margin=new Thickness(0,6,15,0);heroHint.TextWrapping=TextWrapping.Wrap;
         recorderText.Children.Add(heroHint);recorder.Children.Add(recorderText);
@@ -281,6 +364,29 @@ internal static partial class Desktop {
         transcript.TextWrapping=TextWrapping.Wrap;transcript.MaxHeight=80;
         transcript.Margin=new Thickness(0,10,0,2);result.Children.Add(transcript);
         body.Children.Add(Surface(result,19));
+
+        // 运行记录：主界面常驻展开（非 Disclosure），可读区域 + 滚动
+        var logPanel=new StackPanel();
+        logPanel.Children.Add(SectionTitle("运行记录"));
+        var logHint=Hint("客户端识别进度、空结果与错误实时显示在这里。");
+        logHint.Margin=new Thickness(0,5,0,10);logHint.TextWrapping=TextWrapping.Wrap;
+        logPanel.Children.Add(logHint);
+        logBox=new TextBox { Height=176,Margin=new Thickness(0,0,0,0),IsReadOnly=true,
+            TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,
+            Background=T("#F5F6F4","#232529"),Foreground=T("#5C5F63","#C0C2C4"),
+            BorderThickness=new Thickness(0),Padding=new Thickness(9),
+            FontFamily=new FontFamily("Consolas"),FontSize=11 };
+        logPanel.Children.Add(logBox);
+        body.Children.Add(Surface(logPanel,19));
+        return PageScroll(body);
+    }
+
+    static UIElement BuildSettingsPage() {
+        var body=new StackPanel { Margin=new Thickness(24,16,24,20) };
+        body.Children.Add(Text("设置",23,"#1D1F22","#F1F2F0",true));
+        var intro=Text("服务器、更新、浮窗与识别快捷键集中在这里；分组默认折叠。",12,"#7A7E83","#A2A5A9");
+        intro.Margin=new Thickness(0,4,0,17);intro.TextWrapping=TextWrapping.Wrap;body.Children.Add(intro);
 
         var server=new StackPanel();
         var serverHeading=new Grid();
@@ -370,11 +476,10 @@ internal static partial class Desktop {
         serverHint.TextWrapping=TextWrapping.Wrap;serverHint.Margin=new Thickness(0,8,0,0);
         server.Children.Add(serverHint);
         body.Children.Add(Surface(server,19));
-        body.Children.Add(UpdateSection());
+        body.Children.Add(Disclosure("软件更新",UpdateSection()));
 
         var appearance=new StackPanel();
-        appearance.Children.Add(Text("浮窗",13,"#33363A","#E7E8E6",true));
-        showFloat=Switch("显示浮窗");showFloat.Margin=new Thickness(0,12,0,0);
+        showFloat=Switch("显示浮窗");showFloat.Margin=new Thickness(0,2,0,0);
         showFloat.Checked+=(s,e)=>{if(floatWindow!=null)floatWindow.Show();};
         showFloat.Unchecked+=(s,e)=>{if(floatWindow!=null)floatWindow.Hide();};
         appearance.Children.Add(showFloat);
@@ -391,9 +496,9 @@ internal static partial class Desktop {
         glassValue=Text("",11,"#5A5D62","#C7C9C8");
         Grid.SetColumn(glassValue,2);glassRow.Children.Add(glassValue);
         appearance.Children.Add(glassRow);
-        body.Children.Add(Surface(appearance,19));
+        body.Children.Add(Disclosure("浮窗设置",appearance));
 
-        var advancedPanel=new StackPanel { Margin=new Thickness(0,4,0,2) };
+        var advancedPanel=new StackPanel { Margin=new Thickness(0,2,0,2) };
         var secondsCol=new StackPanel { Width=145 };
         secondsCol.Children.Add(Text("停顿判定（秒）",11,"#7A7E83","#A2A5A9"));
         seconds=Field();seconds.Margin=new Thickness(0,5,0,0);secondsCol.Children.Add(seconds);
@@ -408,16 +513,7 @@ internal static partial class Desktop {
         contextHelp.Margin=new Thickness(0,6,0,0);contextCol.Children.Add(contextHelp);
         advancedPanel.Children.Add(contextCol);
         body.Children.Add(Disclosure("识别与快捷键设置",advancedPanel));
-
-        logBox=new TextBox { Height=112,Margin=new Thickness(0,2,0,3),IsReadOnly=true,
-            TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,
-            Background=T("#F5F6F4","#232529"),Foreground=T("#5C5F63","#C0C2C4"),
-            BorderThickness=new Thickness(0),Padding=new Thickness(9),
-            FontFamily=new FontFamily("Consolas"),FontSize=11 };
-        body.Children.Add(Disclosure("运行记录",logBox));
-        scroll.Content=body;Grid.SetRow(scroll,1);root.Children.Add(scroll);
-        main.Content=root;
+        return PageScroll(body);
     }
 
     static void BuildFloat() {
@@ -888,17 +984,73 @@ internal static partial class Desktop {
         }
         return null;
     }
+    // STATE 快照：STATE|recording=<0/1>|connected=<0/1>|started=<unix秒>
+    // （只读命令）。返回 null=无回执（旧客户端无此命令），调用方回退日志驱动。
+    static string QueryBackend(string command, int timeoutMs) {
+        try {
+            using(var udp=new UdpClient()) {
+                udp.Client.ReceiveTimeout=timeoutMs;
+                var bytes=Encoding.ASCII.GetBytes(command);
+                udp.Send(bytes,bytes.Length,new IPEndPoint(IPAddress.Loopback,6018));
+                var remote=new IPEndPoint(IPAddress.Loopback,0);
+                byte[] data;
+                try { data=udp.Receive(ref remote); }
+                catch(System.Net.Sockets.SocketException) { return null; }
+                if(remote.Port!=6018 || !IPAddress.IsLoopback(remote.Address)) return null;
+                return Encoding.ASCII.GetString(data);
+            }
+        } catch { return null; }
+    }
+    // 把 STATE 回执落到真实 UI 状态（非伪造、非超时）：录音与连接以客户端
+    // 当前事实为准；不清在途识别任务（已提交的最终结果仍会返回，idle 快照
+    // 不得误清旧 pending）。started 为录音开始的 Unix 秒，校正计时显示。
+    static void ApplyStateReply(string reply) {
+        if(reply==null || !reply.StartsWith("STATE|")) return;
+        bool rec=recording; long startedEpoch=0;
+        var parts=reply.Split('|');
+        foreach(var p in parts) {
+            if(p.StartsWith("recording=")) rec=p=="recording=1";
+            else if(p.StartsWith("connected=")) connected=p=="connected=1";
+            else if(p.StartsWith("started=")) long.TryParse(p.Substring(8),
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,out startedEpoch);
+        }
+        recording=rec;
+        if(rec && startedEpoch>0)
+            started=new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc).AddSeconds(startedEpoch).ToLocalTime();
+        snapshotSynced=true;
+    }
+    // 启动/接入：全新快照（此前无可保留的旧状态）；UDP 未就绪时由 tick 重试
+    static void SyncBackendSnapshot() {
+        // 只读快照同步 recording/connected；不清旧在途识别任务
+        //（快照 idle 只说明此刻未录音，已提交任务的最终结果仍在途中）
+        var reply=QueryBackend("STATE",900);
+        if(reply!=null) ApplyStateReply(reply);
+    }
+    // 启动/接入时刻的日志字节末尾：之前的行=历史（只展示不塑形）
+    static long ReplayBoundaryBytes() {
+        try {
+            using(var f=new FileStream(Log,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))
+                return f.Length;
+        } catch { return 0; }
+    }
     static void StartBackend() {
         var existing=FindBackend();
-        if(existing!=null) { backend=existing; ownsBackend=true; status.Text="已接入正在运行的客户端"; return; }
-        logPosition=0; partialLine="";
-        var psi=new ProcessStartInfo(Exe) { WorkingDirectory=Dir, UseShellExecute=false,
-            CreateNoWindow=true, WindowStyle=ProcessWindowStyle.Hidden,
-            RedirectStandardOutput=true, RedirectStandardError=true };
-        backend=Process.Start(psi); ownsBackend=true;
-        backend.OutputDataReceived+=(s,e)=>{};
-        backend.ErrorDataReceived+=(s,e)=>{ if(e.Data!=null) main.Dispatcher.BeginInvoke(new Action(()=>AppendLog("错误: "+e.Data))); };
-        backend.BeginOutputReadLine(); backend.BeginErrorReadLine();
+        // 先定格旧日志边界与偏移，再启动/接入：新进程启动后写入的首批事件
+        // 不得划入历史（边界必须是启动前旧日志的字节末尾）
+        logPosition=0; partialLine=""; snapshotSynced=false;
+        replayBoundary=ReplayBoundaryBytes();
+        if(existing!=null) { backend=existing; ownsBackend=true; status.Text="已接入正在运行的客户端"; }
+        else {
+            var psi=new ProcessStartInfo(Exe) { WorkingDirectory=Dir, UseShellExecute=false,
+                CreateNoWindow=true, WindowStyle=ProcessWindowStyle.Hidden,
+                RedirectStandardOutput=true, RedirectStandardError=true };
+            backend=Process.Start(psi); ownsBackend=true;
+            backend.OutputDataReceived+=(s,e)=>{};
+            backend.ErrorDataReceived+=(s,e)=>{ if(e.Data!=null) main.Dispatcher.BeginInvoke(new Action(()=>AppendLog("错误: "+e.Data))); };
+            backend.BeginOutputReadLine(); backend.BeginErrorReadLine();
+        }
+        SyncBackendSnapshot();
     }
     static bool RestartBackend() {
         if(!TryPrepareBackendShutdown()) {
@@ -909,7 +1061,7 @@ internal static partial class Desktop {
             if(!ownsBackend) { MessageBox.Show("已有其他程序启动的客户端。请先退出旧客户端，再重试。"); return false; }
             backend.Kill(); backend.WaitForExit(5000);
         }
-        backend=null; ownsBackend=false; connected=false; recording=false; processing=false;
+        backend=null; ownsBackend=false; connected=false; recording=false; pendingTasks.Clear();
         StartBackend();
         return true;
     }
@@ -958,44 +1110,106 @@ internal static partial class Desktop {
     }
     static void ToggleRecording() {
         if(backend==null || backend.HasExited || !connected) { MessageBox.Show("客户端尚未连接服务器。"); return; }
-        SendControl(recording?"STOP":"START");
+        string cmd=recording?"STOP":"START";
+        string ack=QueryBackend(cmd,900);   // STOP 总有 STOPPED 回执；START 无回执
+        // 真实状态快照确认（客户端回执 STATE）：停止命令在未录音时也立即
+        // 恢复 UI，不伪造成功、不靠超时；STATE 缺失时回退到回执/日志驱动。
+        var snap=QueryBackend("STATE",400);
+        if(snap!=null) ApplyStateReply(snap);
+        else if(cmd=="STOP" && ack=="STOPPED") recording=false;
     }
     static void ReadLog() {
         if(!File.Exists(Log)) return;
         try {
             using(var f=new FileStream(Log,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)) {
-                if(f.Length<logPosition){logPosition=0;partialLine="";connected=false;}
+                // 日志被新客户端进程截断重建：偏移复位、历史边界作废（之后全实时）
+                if(f.Length<replayBoundary) replayBoundary=0;
+                if(f.Length<logPosition){logPosition=0;partialLine="";connected=false;pendingTasks.Clear();replayBoundary=0;}
                 if(f.Length==logPosition) return;
-                f.Seek(logPosition,SeekOrigin.Begin);
-                using(var reader=new StreamReader(f,Encoding.UTF8,true,4096,true)) {
-                    partialLine+=reader.ReadToEnd();logPosition=f.Position;
+                // 历史字节边界：replayBoundary 之前只展示不塑形，之后全实时。
+                // 空文件/新日志时 boundary=0，新进程最早的事件不会误判为历史。
+                f.Seek(logPosition,SeekOrigin.Begin);   // 增量读取必须先定位
+                long segEnd=f.Length;
+                bool historical=false;
+                if(logPosition<replayBoundary) { historical=true; segEnd=Math.Min(segEnd,replayBoundary); }
+                int bytes=(int)(segEnd-logPosition);
+                var buf=new byte[bytes];
+                int total=0;
+                while(total<bytes) {
+                    int n=f.Read(buf,total,bytes-total);
+                    if(n<=0)break;
+                    total+=n;
+                }
+                logPosition+=total;
+                string text=Encoding.UTF8.GetString(buf,0,total);
+                var lines=Regex.Split(text,@"\r?\n");
+                string tail=lines[lines.Length-1];
+                if(historical && logPosition>=replayBoundary) {
+                    // 历史段收尾：整行+末尾半行都按历史处理；半行不与实时字节拼接
+                    partialLine="";
+                    for(int i=0;i<lines.Length-1;i++) ProcessLine(lines[i],true);
+                    if(tail.Length>0) ProcessLine(tail,true);
+                } else {
+                    partialLine+=text;
+                    var split=Regex.Split(partialLine,@"\r?\n");
+                    partialLine=split[split.Length-1];
+                    for(int i=0;i<split.Length-1;i++) ProcessLine(split[i],historical);
                 }
             }
-            var lines=Regex.Split(partialLine,@"\r?\n");
-            partialLine=lines[lines.Length-1];
-            for(int i=0;i<lines.Length-1;i++) ProcessLine(lines[i]);
         }catch(IOException){}
     }
-    static void ProcessLine(string line) {
-        if(line.Contains("WebSocket 建立成功")) connected=true;
-        if(line.Contains("WebSocket") && (line.Contains("断开")||line.Contains("关闭")||line.Contains("失败"))) connected=false;
-        if(line.Contains("HTTP 401")||line.Contains("令牌")||line.Contains("API Key")) connected=false;
-        if(line.Contains("触发：开始录音")) { recording=true; processing=false; started=DateTime.Now; lastText=""; }
-        if(line.Contains("释放：完成录音")) { recording=false; processing=!liveMode; }
+    // 识别状态机（真实日志驱动，无定时假状态）：
+    // - 触发/释放：开始、结束录音（recording）；
+    // - 识别等待 = pendingTasks（未完成识别任务集）：客户端“任务生命周期:
+    //   提交/完成/发送失败 <task_id>”事件驱动——提交入集、完成/发送失败
+    //   按 id 移除；多段识别各自独立，单个 final 只结束自己的任务；
+    // - 全部清空（终态兜底）：断线（connected=false 各行）、后端退出
+    //   （UpdateDisplay 按 alive 清）、日志截断（ReadLog）。取消/录音任务
+    //   错误只复位录音标志，不得清旧在途任务（旧任务的最终结果仍会返回）；
+    // - 历史回放（historical）：只进日志显示，不塑形实时状态——GUI 启动
+    //   不得因历史 start 无 cancel 而假录音/假识别；接入运行中客户端的
+    //   真实状态由 STATE 快照同步。
+    static string TaskEventId(string line,string marker) {
+        int i=line.IndexOf(marker,StringComparison.Ordinal);
+        if(i<0)return null;
+        string id=line.Substring(i+marker.Length).Trim();
+        return id.Length>0?id:null;
+    }
+    static void ProcessLine(string line) { ProcessLine(line,false); }
+    static void ProcessLine(string line, bool historical) {
+        if(line.Contains("WebSocket 建立成功")) { if(!historical) connected=true; }
+        if(line.Contains("WebSocket") && (line.Contains("断开")||line.Contains("关闭")||line.Contains("失败"))) { if(!historical) { connected=false; pendingTasks.Clear(); } }
+        if(line.Contains("HTTP 401")||line.Contains("令牌")||line.Contains("API Key")) { if(!historical) { connected=false; pendingTasks.Clear(); } }
+        string taskId;
+        if((taskId=TaskEventId(line,"任务生命周期: 提交 "))!=null) { if(!historical) pendingTasks.Add(taskId); }
+        else if((taskId=TaskEventId(line,"任务生命周期: 完成 "))!=null) { if(!historical) pendingTasks.Remove(taskId); }
+        else if((taskId=TaskEventId(line,"任务生命周期: 发送失败 "))!=null) { if(!historical) pendingTasks.Remove(taskId); }
+        if(line.Contains("触发：开始录音")) { if(!historical) { recording=true; started=DateTime.Now; lastText=""; } }
+        if(line.Contains("释放：完成录音")) { if(!historical) recording=false; }
+        // 取消/错误只结束录音本身；不清 pendingTasks（旧在途任务不受影响）
+        if(line.Contains("录音任务被取消")||line.Contains("取消录音任务")) { if(!historical) recording=false; }
+        if(line.Contains("录音任务错误")) { if(!historical) recording=false; }
+        // 客户端忽略命令的真实回声：UI 与客户端状态错位时实时校正
+        if(line.Contains("忽略 STOP 命令")) { if(!historical) recording=false; }
+        if(line.Contains("忽略 START 命令")) { if(!historical) { recording=true; started=DateTime.Now; } }
         int interim=line.IndexOf("实时识别片段:",StringComparison.Ordinal);
-        if(interim>=0) lastText=line.Substring(interim+"实时识别片段:".Length).Trim();
+        if(interim>=0 && !historical) lastText=line.Substring(interim+"实时识别片段:".Length).Trim();
         int final=line.IndexOf("收到最终识别结果:",StringComparison.Ordinal);
-        if(final>=0) {
+        if(final>=0 && !historical) {
             string piece=line.Substring(final+"收到最终识别结果:".Length).Trim();
             int timing=piece.IndexOf(", 时延:",StringComparison.Ordinal);
             if(timing>=0)piece=piece.Substring(0,timing).Trim();
             piece=Regex.Replace(piece,@"(?:\s*/sil\s*)+$","",RegexOptions.IgnoreCase).Trim();
             lastText=liveMode?lastText+piece:piece;
-            processing=false;
         }
         if(line.Contains("实时输入已暂停") || line.Contains("最终文字未输入")) AppendLog(line);
-        else if(line.Contains("触发：开始录音")||line.Contains("释放：完成录音")||interim>=0||final>=0||
-            line.Contains("WebSocket 建立成功")||line.Contains("HTTP 401")||line.Contains("令牌")||
+        else if(line.Contains("任务生命周期")||line.Contains("服务端未连接")||
+            line.Contains("触发：开始录音")||line.Contains("释放：完成录音")||interim>=0||final>=0||
+            line.Contains("空语音片段未输出文字")||line.Contains("取消录音任务")||
+            line.Contains("录音任务被取消")||line.Contains("录音任务错误")||
+            line.Contains("停顿后发送语音")||line.Contains("停顿分段录音完成")||
+            line.Contains("忽略 STOP 命令")||line.Contains("忽略 START 命令")||
+            line.Contains("WebSocket")||line.Contains("HTTP 401")||line.Contains("令牌")||
             line.Contains("API Key")||line.Contains("ERROR")) AppendLog(line);
     }
     static void AppendLog(string line) {
@@ -1003,56 +1217,124 @@ internal static partial class Desktop {
         if(logBox.Text.Length>24000) logBox.Text=logBox.Text.Substring(logBox.Text.Length-16000);
         logBox.ScrollToEnd();
     }
+    // 识别等待态的录制按钮内容：旋转弧 + “识别中”（相位由 stateAnimTick 推进）
+    static object ProcessingContent() {
+        mainSpinnerRotate=new RotateTransform(0,8,8);
+        mainSpinner=new System.Windows.Shapes.Path {
+            Data=Geometry.Parse("M 8,1.5 A 6.5,6.5 0 1 1 1.5,8"),
+            Stroke=T("#8A6A32","#E6D5B4"),StrokeThickness=2,
+            StrokeStartLineCap=PenLineCap.Round,StrokeEndLineCap=PenLineCap.Round,
+            Width=16,Height=16,RenderTransform=mainSpinnerRotate,
+            VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,9,0) };
+        var row=new StackPanel { Orientation=Orientation.Horizontal,
+            HorizontalAlignment=HorizontalAlignment.Center };
+        row.Children.Add(mainSpinner);
+        row.Children.Add(Text("识别中",13,"#8A6A32","#E6D5B4",true));
+        return row;
+    }
+    // 识别等待动画的启停：状态本身由日志驱动（processing），这里只切动画相位。
+    static void UpdateProcessingAnimation() {
+        if(stateAnimTick==null)return;
+        if(processing) {
+            if(!stateAnimTick.IsEnabled){stateAnimPhase=0;stateAnimTick.Start();}
+        } else if(stateAnimTick.IsEnabled) {
+            stateAnimTick.Stop();
+            if(mainStateDot!=null)mainStateDot.Opacity=1;
+            if(sideDot!=null)sideDot.Opacity=1;
+            if(floatConnectionDot!=null)floatConnectionDot.Opacity=1;
+            if(floatRecord!=null)floatRecord.Opacity=1;
+            if(compactRecord!=null)compactRecord.Opacity=1;
+        }
+    }
+    // 呼吸（状态灯/浮窗指示灯）+ 旋转（录制按钮弧）相位推进；仅表达“识别中”。
+    static void AnimateProcessingState() {
+        stateAnimPhase+=0.17;
+        double breath=0.32+0.68*Math.Abs(Math.Sin(stateAnimPhase*1.1));
+        if(mainStateDot!=null)mainStateDot.Opacity=breath;
+        if(sideDot!=null)sideDot.Opacity=breath;
+        if(floatConnectionDot!=null)floatConnectionDot.Opacity=breath;
+        if(mainSpinnerRotate!=null)mainSpinnerRotate.Angle=(stateAnimPhase*170)%360;
+        if(!recording) {
+            if(floatRecord!=null)floatRecord.Opacity=0.62+0.38*breath;
+            if(compactRecord!=null)compactRecord.Opacity=0.6+0.4*breath;
+        }
+    }
     static void UpdateDisplay() {
         bool alive=backend!=null && !backend.HasExited;
+        // 后端退出 / 断线：识别等待立即清空（真实终态，不用超时假清除）
+        if(!alive || !connected) pendingTasks.Clear();
+        if(!alive) recording=false;
         string state=!alive?"客户端未运行":recording?"正在录音  "+(DateTime.Now-started).ToString(@"mm\:ss"):
             processing?"正在识别":connected?"准备就绪":"正在连接服务器";
         status.Text=state;
         heroHint.Text=recording?
             (liveMode?"停顿后发送有效语音，继续说会继续输入":"结束录音后一次回写"):
+            processing?(liveMode?"最后一段结果返回中，请稍候":"正在识别整段语音，结果返回后写入"):
             connected?"连接到 "+ServerDisplay()+"  ·  "+ShortcutHint():
             "正在连接 "+ServerDisplay();
-        sideStatus.Text=recording?"正在录音":connected?"服务已连接":"尚未连接";
-        sideDot.Fill=B(recording?"#D96A64":connected?"#5FA982":"#A9ACAF");
+        // 状态灯：录音=红、识别等待=琥珀呼吸、已连接=绿、未连接=灰
+        string dotHex=recording?RecHex:processing?WarnHex:connected?OkHex:IdleHex;
+        mainStateDot.Fill=B(dotHex);
+        mainStateDot.ToolTip=recording?"正在录音":processing?"正在识别，请稍候":
+            connected?"已连接服务器":"未连接服务器";
+        sideStatus.Text=recording?"正在录音":processing?"识别中":connected?"服务已连接":"尚未连接";
+        sideDot.Fill=B(dotHex);
         bool floatReady=alive&&connected;
-        var floatIndicator=B(recording?"#D96A64":floatReady?"#5FA982":"#D99A4E");
+        var floatIndicator=B(recording?RecHex:processing?WarnHex:floatReady?OkHex:WarnHex);
         floatConnectionDot.Fill=floatIndicator;
-        floatConnectionDot.ToolTip=recording?"正在录音":
+        floatConnectionDot.ToolTip=recording?"正在录音":processing?"正在识别，请稍候":
             floatReady?"已连接":"未连接服务器";
-        floatOuter.BorderBrush=floatReady?T("#55FFFFFF","#44FFFFFF"):B("#D99A4E");
+        floatOuter.BorderBrush=floatReady?T("#55FFFFFF","#44FFFFFF"):B(WarnHex);
         floatStatus.Text=recording?(DateTime.Now-started).ToString(@"mm\:ss"):
             processing?"识别中":"";
         floatDetail.Text=lastText.Length>0?
             (lastText.Length>28?"…"+lastText.Substring(lastText.Length-28):lastText):
-            recording?"边说边输入当前应用":ServerDisplay();
+            recording?"边说边输入当前应用":processing?"正在识别，请稍候":ServerDisplay();
         transcript.Text=lastText.Length>0?
             (lastText.Length>160?"…"+lastText.Substring(lastText.Length-160):lastText):
             "等待录音。你说的话会出现在这里。";
-        mainRecord.Content=recording?"■  结束录音":"●  开始录音";
+        // 录制按钮：录音=结束方块；识别等待=旋转指示 + “识别中”；空闲=开始
+        // （内容对象在进入该状态时只创建一次，避免每 tick 重建重置旋转角）
+        if(processing && !recording) {
+            if(!(mainRecord.Content is StackPanel)) mainRecord.Content=ProcessingContent();
+        } else {
+            string label=recording?"■  结束录音":"●  开始录音";
+            if(!(mainRecord.Content is string) || (string)mainRecord.Content!=label) mainRecord.Content=label;
+        }
         SetRecordButtonVisual(floatRecord,recording);
         SetRecordButtonVisual(compactRecord,recording);
         ((Ellipse)((Grid)compactRecord.Content).Children[0]).Fill=floatIndicator;
-        compactRecord.ToolTip=recording?"点击结束录音":
+        var floatGlyph=floatRecord.Content as Grid;
+        if(floatGlyph!=null && !recording) ((Ellipse)floatGlyph.Children[0]).Fill=floatIndicator;
+        string recTip=recording?"点击结束录音":processing?"正在识别，请稍候":
             floatReady?"点击开始录音":"未连接服务器";
+        mainRecord.ToolTip=recording?"点击结束录音":processing?"正在识别，请稍候":null;
+        compactRecord.ToolTip=recTip;
+        floatRecord.ToolTip=recTip;
         UpdateWaveAnimation();
-        mainRecord.Background=recording?T("#F3E3E1","#5A3A3C"):T("#26282B","#EDEEEC");
-        mainRecord.Foreground=recording?T("#9E4038","#F4E4E2"):T("#FFFFFF","#1D1F22");
+        UpdateProcessingAnimation();
+        mainRecord.Background=recording?T("#F3E3E1","#5A3A3C"):processing?T("#F3EADB","#4E4434"):T("#26282B","#EDEEEC");
+        mainRecord.Foreground=recording?T("#9E4038","#F4E4E2"):processing?T("#8A6A32","#E6D5B4"):T("#FFFFFF","#1D1F22");
         mainRecord.IsEnabled=floatRecord.IsEnabled=compactRecord.IsEnabled=alive&&connected;
-        tray.Text=recording?"CapsWriter · 正在录音":"CapsWriter · "+(connected?"已连接":"未连接");
+        tray.Text=recording?"CapsWriter · 正在录音":processing?"CapsWriter · 识别中":"CapsWriter · "+(connected?"已连接":"未连接");
     }
     // 返回 false = 无法确认客户端已完成录音停止与输出恢复，
     // 本次退出被放弃（客户端进程保持运行，不 Kill）。
     static bool Exit() {
         if(exiting) return true; exiting=true;
-        if(tick!=null) tick.Stop();
-        if(waveTick!=null) waveTick.Stop();
-        // 记录定时器原状态：握手被取消时按原样恢复，UI 保持可用
+        // 先采样定时器状态再停止：Stop 之后 IsEnabled 恒为 false，若在停止后
+        // 采样，握手被取消时定时器永远不会恢复，界面随之失去响应
         bool tickWasRunning=tick!=null && tick.IsEnabled;
         bool waveWasRunning=waveTick!=null && waveTick.IsEnabled;
+        bool stateAnimWasRunning=stateAnimTick!=null && stateAnimTick.IsEnabled;
+        if(tick!=null) tick.Stop();
+        if(waveTick!=null) waveTick.Stop();
+        if(stateAnimTick!=null) stateAnimTick.Stop();
         if(!TryPrepareBackendShutdown()) {
             exiting=false;
             if(tickWasRunning) tick.Start();
             if(waveWasRunning) waveTick.Start();
+            if(stateAnimWasRunning) stateAnimTick.Start();
             return false;
         }
         if(tray!=null){tray.Visible=false;tray.Dispose();tray=null;}

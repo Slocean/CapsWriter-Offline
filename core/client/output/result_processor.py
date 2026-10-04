@@ -19,8 +19,12 @@ from core.protocol import RecognitionMessage
 from core.client.output.text_output import TextOutput
 from core.client.output.live_output import LiveOutputSession
 from core.tools.window_detector import get_active_window_info
+from core.logger import LIFECYCLE_PREFIX, Logger
 import keyboard
 from . import logger
+
+# 生命周期遥测通道：INFO 语义、不受用户 log_level 过滤（见 core/logger.py）
+lifecycle = Logger.telemetry('client')
 
 from core.client.udp.udp_broadcaster import broadcast_output_udp
 from core.tools.zhconv import convert as zhconv_convert
@@ -192,12 +196,16 @@ class ResultProcessor:
         original_text = text  # 保存原始识别结果
         if message.is_final and not text and getattr(Config, "pause_segmented", False):
             logger.info("空语音片段未输出文字")
+            # 桌面端状态事件：空结果同样结束对应任务，识别等待据此清除
+            lifecycle.info(f"{LIFECYCLE_PREFIX}完成 {message.task_id}")
             self._live_session = None
             return
         delay = message.time_complete - message.time_submit
 
         if message.is_final:
             logger.info(f"收到最终识别结果: {text}, 时延: {delay:.2f}s")
+            # 桌面端状态事件：该 task_id 的识别等待到此结束（幂等，未知 id 忽略）
+            lifecycle.info(f"{LIFECYCLE_PREFIX}完成 {message.task_id}")
         else:
             logger.debug(
                 f"接收到识别结果，文本: {text[:50]}{'...' if len(text) > 50 else ''}, "

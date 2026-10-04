@@ -23,7 +23,11 @@ from core.client.audio.file_manager import AudioFileManager
 from core.client.audio.pause_segmenter import PauseSegmenter
 from core.client.connection import WebSocketManager
 from core.protocol import AudioMessage
+from core.logger import LIFECYCLE_PREFIX, Logger
 from . import logger
+
+# 生命周期遥测通道：INFO 语义、不受用户 log_level 过滤（见 core/logger.py）
+lifecycle = Logger.telemetry('client')
 
 if TYPE_CHECKING:
     from core.client.state import ClientState
@@ -73,13 +77,28 @@ class AudioRecorder:
                 self.state.pop_audio_file(message.task_id)
                 console.print('    服务端未连接，无法发送\n')
                 logger.warning("服务端未连接，无法发送音频数据")
+                # 真实失败：任务从未提交，等待方按 id 终态。
+                # 走遥测通道的 error 语义：任何 log_level（含 CRITICAL）不丢。
+                lifecycle.error(f"{LIFECYCLE_PREFIX}发送失败 {message.task_id}")
             return
-        
-        # 使用 WebSocketManager 发送协议消息
-        success = await self._ws_manager.send(message)
+
+        if message.is_final:
+            # 在 await 挂起前先登记提交意图：低延迟服务端可能在 send 返回
+            # 前就推回最终结果（完成事件先于提交回执到达）。等待方先持有
+            # 该任务；成功保持等完成；失败/异常/取消在下方按同一 id 终态。
+            lifecycle.info(f"{LIFECYCLE_PREFIX}提交 {message.task_id}")
+        try:
+            success = await self._ws_manager.send(message)
+        except BaseException:
+            # 含 asyncio.CancelledError：send 中途被打断，该 id 不会再有
+            # 完成事件，按发送失败终态，避免等待方永久亮灯
+            if message.is_final:
+                lifecycle.error(f"{LIFECYCLE_PREFIX}发送失败 {message.task_id}")
+            raise
         if not success and message.is_final:
             self.state.pop_audio_file(message.task_id)
-            # 具体错误日志由 WebSocketManager 记录
+            # 具体错误日志由 WebSocketManager 记录；遥测 error 语义终态
+            lifecycle.error(f"{LIFECYCLE_PREFIX}发送失败 {message.task_id}")
     
     async def record_and_send(self) -> None:
         """
