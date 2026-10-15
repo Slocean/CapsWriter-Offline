@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from typing import TYPE_CHECKING, Optional
@@ -296,25 +297,30 @@ class ResultProcessor:
 
         # LLM 处理和输出
         llm_result = None
-        if Config.llm_enabled:
-            llm_result = await self.app.llm.process_and_output(
-                text,
-                paste=paste,
-                matched_hotwords=potential_hotwords  # 传递上下文热词给 LLM
-            )
-        else:
-            handled = False
-            if Config.live_output and self._live_session is not None and self._live_session.task_id == message.task_id:
-                handled = self._live_session.update(text, final=True)
-                if not handled:
-                    logger.warning("最终文字未输入：目标窗口焦点已变化，请从日志复制结果")
-                elif self._live_session.revision_skipped:
-                    logger.warning("最终结果修改了较早的文字；已保留输入内容并仅更新末尾，完整结果见日志")
-            if not handled and (self._live_session is None or self._live_session.task_id != message.task_id):
-                await self.output.output(text, paste=paste)
-            self._live_session = None
-            self.state.set_output_text(text)
-            broadcast_output_udp(text)
+        try:
+            if Config.llm_enabled:
+                llm_result = await self.app.llm.process_and_output(
+                    text,
+                    paste=paste,
+                    matched_hotwords=potential_hotwords  # 传递上下文热词给 LLM
+                )
+            else:
+                handled = False
+                if Config.live_output and self._live_session is not None and self._live_session.task_id == message.task_id:
+                    handled = self._live_session.update(text, final=True)
+                    if not handled:
+                        logger.warning("最终文字未输入：目标窗口焦点已变化，请从日志复制结果")
+                    elif self._live_session.revision_skipped:
+                        logger.warning("最终结果修改了较早的文字；已保留输入内容并仅更新末尾，完整结果见日志")
+                if not handled and (self._live_session is None or self._live_session.task_id != message.task_id):
+                    await self.output.output(text, paste=paste)
+                self._live_session = None
+                self.state.set_output_text(text)
+                broadcast_output_udp(text)
+        finally:
+            # 等粘贴恢复结束再复制；输入失败时也保留可手动复制的最终全文。
+            display_text = llm_result.result if llm_result and llm_result.processed else text
+            lifecycle.info(f"{LIFECYCLE_PREFIX}文字 {json.dumps(display_text, ensure_ascii=False)}")
 
         # 保存录音与写入 md 文件
         file_audio = None

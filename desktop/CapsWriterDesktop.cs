@@ -39,9 +39,9 @@ internal static partial class Desktop {
     static Forms.NotifyIcon tray;
     static Process backend;
     static DispatcherTimer tick;
-    static TextBox host, port, seconds, contextWords, logBox, urlField;
+    static TextBox host, port, seconds, contextWords, logBox, urlField, transcript;
     static PasswordBox apiKeyField;
-    static TextBlock status, transcript, floatStatus, floatDetail, heroHint, sideStatus, apiKeyHint, serverHint;
+    static TextBlock status, floatStatus, floatDetail, heroHint, sideStatus, apiKeyHint, serverHint;
     static UIElement lanFields, remoteFields;
     static Button lanModeButton, remoteModeButton;
     static Ellipse sideDot, floatConnectionDot;
@@ -71,6 +71,7 @@ internal static partial class Desktop {
     static double stateAnimPhase;
     static bool mainLoaded;                    // 启动装配完成标志：快捷键自动应用仅在装配完成后生效
     static string lastText = "";
+    static string finalText = "";
     static DateTime started;
     static long logPosition;
     static string partialLine = "";
@@ -360,8 +361,12 @@ internal static partial class Desktop {
 
         var result=new StackPanel();
         result.Children.Add(Text("识别文字",13,"#33363A","#E7E8E6",true));
-        transcript=Text("等待录音。你说的话会出现在这里。",14,"#5A5D62","#B9BBBD");
-        transcript.TextWrapping=TextWrapping.Wrap;transcript.MaxHeight=80;
+        transcript=new TextBox { Text="等待录音。你说的话会出现在这里。",IsReadOnly=true,
+            TextWrapping=TextWrapping.Wrap,MaxHeight=120,MinHeight=40,
+            VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,
+            Background=Brushes.Transparent,Foreground=T("#5A5D62","#B9BBBD"),
+            BorderThickness=new Thickness(0),Padding=new Thickness(0),FontSize=14 };
         transcript.Margin=new Thickness(0,10,0,2);result.Children.Add(transcript);
         body.Children.Add(Surface(result,19));
 
@@ -483,6 +488,11 @@ internal static partial class Desktop {
         showFloat.Checked+=(s,e)=>{if(floatWindow!=null)floatWindow.Show();};
         showFloat.Unchecked+=(s,e)=>{if(floatWindow!=null)floatWindow.Hide();};
         appearance.Children.Add(showFloat);
+        var pin=Switch("浮窗始终置于最顶层");
+        pin.IsChecked=floatTopmost;pin.Margin=new Thickness(0,13,0,0);
+        pin.Checked+=(s,e)=>{floatTopmost=true;if(floatWindow!=null)floatWindow.Topmost=true;SaveUiPrefs();};
+        pin.Unchecked+=(s,e)=>{floatTopmost=false;if(floatWindow!=null)floatWindow.Topmost=false;SaveUiPrefs();};
+        appearance.Children.Add(pin);
         var glassRow=new Grid { Margin=new Thickness(0,13,0,0) };
         glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(90) });
         glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
@@ -499,6 +509,11 @@ internal static partial class Desktop {
         body.Children.Add(Disclosure("浮窗设置",appearance));
 
         var advancedPanel=new StackPanel { Margin=new Thickness(0,2,0,2) };
+        var copy=Switch("识别完成后自动复制到剪贴板");
+        copy.IsChecked=autoCopy;copy.Margin=new Thickness(0,0,0,13);
+        copy.Checked+=(s,e)=>{autoCopy=true;SaveUiPrefs();};
+        copy.Unchecked+=(s,e)=>{autoCopy=false;SaveUiPrefs();};
+        advancedPanel.Children.Add(copy);
         var secondsCol=new StackPanel { Width=145 };
         secondsCol.Children.Add(Text("停顿判定（秒）",11,"#7A7E83","#A2A5A9"));
         seconds=Field();seconds.Margin=new Thickness(0,5,0,0);secondsCol.Children.Add(seconds);
@@ -520,7 +535,7 @@ internal static partial class Desktop {
         floatWindow=new Window { Width=floatCollapsed?116:320,Height=floatCollapsed?56:108,
             WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.NoResize,
             AllowsTransparency=true,Background=Brushes.Transparent,
-            Topmost=true,ShowInTaskbar=false,ShowActivated=false,
+            Topmost=floatTopmost,ShowInTaskbar=false,ShowActivated=false,
             FontFamily=new FontFamily("Microsoft YaHei UI") };
         var work=SystemParameters.WorkArea;
         floatWindow.Left=Double.IsNaN(floatLeft)?work.Right-floatWindow.Width-22:
@@ -1177,6 +1192,23 @@ internal static partial class Desktop {
     }
     static void ProcessLine(string line) { ProcessLine(line,false); }
     static void ProcessLine(string line, bool historical) {
+        const string textEvent="任务生命周期: 文字 ";
+        int result=line.IndexOf(textEvent,StringComparison.Ordinal);
+        if(result==0 || (result>0 && line.Substring(0,result).TrimEnd().EndsWith("]",StringComparison.Ordinal))) {
+            if(historical)return;
+            string piece;
+            try { piece=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<string>(line.Substring(result+textEvent.Length)); }
+            catch(ArgumentException) { return; }
+            catch(InvalidOperationException) { return; }
+            if(String.IsNullOrWhiteSpace(piece))return;
+            finalText=liveMode?finalText+piece:piece;
+            lastText=finalText;
+            if(autoCopy) {
+                try { Clipboard.SetDataObject(lastText,true); }
+                catch(System.Runtime.InteropServices.ExternalException) { AppendLog("自动复制失败：剪贴板被占用，可在识别文字框中手动复制。"); }
+            }
+            return;
+        }
         if(line.Contains("WebSocket 建立成功")) { if(!historical) connected=true; }
         if(line.Contains("WebSocket") && (line.Contains("断开")||line.Contains("关闭")||line.Contains("失败"))) { if(!historical) { connected=false; pendingTasks.Clear(); } }
         if(line.Contains("HTTP 401")||line.Contains("令牌")||line.Contains("API Key")) { if(!historical) { connected=false; pendingTasks.Clear(); } }
@@ -1184,7 +1216,7 @@ internal static partial class Desktop {
         if((taskId=TaskEventId(line,"任务生命周期: 提交 "))!=null) { if(!historical) pendingTasks.Add(taskId); }
         else if((taskId=TaskEventId(line,"任务生命周期: 完成 "))!=null) { if(!historical) pendingTasks.Remove(taskId); }
         else if((taskId=TaskEventId(line,"任务生命周期: 发送失败 "))!=null) { if(!historical) pendingTasks.Remove(taskId); }
-        if(line.Contains("触发：开始录音")) { if(!historical) { recording=true; started=DateTime.Now; lastText=""; } }
+        if(line.Contains("触发：开始录音")) { if(!historical) { recording=true; started=DateTime.Now; lastText=""; finalText=""; } }
         if(line.Contains("释放：完成录音")) { if(!historical) recording=false; }
         // 取消/错误只结束录音本身；不清 pendingTasks（旧在途任务不受影响）
         if(line.Contains("录音任务被取消")||line.Contains("取消录音任务")) { if(!historical) recording=false; }
@@ -1193,15 +1225,8 @@ internal static partial class Desktop {
         if(line.Contains("忽略 STOP 命令")) { if(!historical) recording=false; }
         if(line.Contains("忽略 START 命令")) { if(!historical) { recording=true; started=DateTime.Now; } }
         int interim=line.IndexOf("实时识别片段:",StringComparison.Ordinal);
-        if(interim>=0 && !historical) lastText=line.Substring(interim+"实时识别片段:".Length).Trim();
+        if(interim>=0 && !historical) lastText=finalText+line.Substring(interim+"实时识别片段:".Length).Trim();
         int final=line.IndexOf("收到最终识别结果:",StringComparison.Ordinal);
-        if(final>=0 && !historical) {
-            string piece=line.Substring(final+"收到最终识别结果:".Length).Trim();
-            int timing=piece.IndexOf(", 时延:",StringComparison.Ordinal);
-            if(timing>=0)piece=piece.Substring(0,timing).Trim();
-            piece=Regex.Replace(piece,@"(?:\s*/sil\s*)+$","",RegexOptions.IgnoreCase).Trim();
-            lastText=liveMode?lastText+piece:piece;
-        }
         if(line.Contains("实时输入已暂停") || line.Contains("最终文字未输入")) AppendLog(line);
         else if(line.Contains("任务生命周期")||line.Contains("服务端未连接")||
             line.Contains("触发：开始录音")||line.Contains("释放：完成录音")||interim>=0||final>=0||
@@ -1290,9 +1315,8 @@ internal static partial class Desktop {
         floatDetail.Text=lastText.Length>0?
             (lastText.Length>28?"…"+lastText.Substring(lastText.Length-28):lastText):
             recording?"边说边输入当前应用":processing?"正在识别，请稍候":ServerDisplay();
-        transcript.Text=lastText.Length>0?
-            (lastText.Length>160?"…"+lastText.Substring(lastText.Length-160):lastText):
-            "等待录音。你说的话会出现在这里。";
+        string displayText=lastText.Length>0?lastText:"等待录音。你说的话会出现在这里。";
+        if(transcript.Text!=displayText)transcript.Text=displayText;
         // 录制按钮：录音=结束方块；识别等待=旋转指示 + “识别中”；空闲=开始
         // （内容对象在进入该状态时只创建一次，避免每 tick 重建重置旋转角）
         if(processing && !recording) {

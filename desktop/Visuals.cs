@@ -28,6 +28,8 @@ internal static partial class Desktop {
     static readonly Dictionary<string, ThemeInk> inks = new Dictionary<string, ThemeInk>();
     static bool darkTheme;
     static bool floatCollapsed;
+    static bool autoCopy;
+    static bool floatTopmost=true;
     static double glassStrength = 55;
     static double floatLeft = Double.NaN, floatTop = Double.NaN;
     static string UiPrefsPath { get { return Path.Combine(Dir, "desktop_ui.ini"); } }
@@ -194,6 +196,8 @@ internal static partial class Desktop {
                 else if (key=="glass" && Double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out n))
                     glassStrength=Math.Max(0,Math.Min(100,n));
                 else if (key=="collapsed") floatCollapsed=value=="1";
+                else if (key=="auto_copy") autoCopy=value=="1";
+                else if (key=="float_topmost") floatTopmost=value=="1";
                 else if (key=="left" && Double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out n))
                     floatLeft=n;
                 else if (key=="top" && Double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out n))
@@ -206,6 +210,8 @@ internal static partial class Desktop {
             string data="theme="+(darkTheme?"dark":"light")+"\n"+
                 "glass="+glassStrength.ToString("F0",CultureInfo.InvariantCulture)+"\n"+
                 "collapsed="+(floatCollapsed?"1":"0")+"\n"+
+                "auto_copy="+(autoCopy?"1":"0")+"\n"+
+                "float_topmost="+(floatTopmost?"1":"0")+"\n"+
                 "left="+floatLeft.ToString("F0",CultureInfo.InvariantCulture)+"\n"+
                 "top="+floatTop.ToString("F0",CultureInfo.InvariantCulture)+"\n";
             File.WriteAllText(UiPrefsPath,data);
