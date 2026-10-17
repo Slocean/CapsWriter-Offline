@@ -9,6 +9,7 @@ UDP 控制模块
 - STOP: 停止录音
 - STATE: 只读状态快照（STATE|recording=<0/1>|connected=<0/1>），
   供桌面端接入已运行客户端时同步真实录音/连接状态
+- LEVEL: 只读麦克风 RMS（LEVEL|<0..1>），仅返回最近 250ms 内的录音音量
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import os
 import socket
 import sys
 import threading
+import time
 from typing import TYPE_CHECKING
 
 from config_client import ClientConfig as Config
@@ -138,11 +140,16 @@ class UDPController:
             # started 为录音开始的 Unix 秒时间戳（未录音为 0）。
             ws = getattr(self.manager.app, 'ws', None)
             ws_connected = bool(getattr(ws, 'is_connected', False))
-            self._reply(addr, ("STATE|recording=%d|connected=%d|started=%d"
+            self._reply(addr, ("STATE|recording=%d|connected=%d|started=%d|meter=1"
                                % (1 if state.recording else 0,
                                   1 if ws_connected else 0,
                                   int(getattr(state, 'recording_start_time', 0.0) or 0))
                                ).encode('ascii'))
+
+        elif command == 'LEVEL':
+            stamp, rms = getattr(state, 'audio_level', (0.0, 0.0))
+            level = min(1.0, max(0.0, rms)) if state.recording and time.monotonic() - stamp < 0.25 else 0.0
+            self._reply(addr, f'LEVEL|{level:.6f}'.encode('ascii'))
 
         elif command == 'PREPARE_SHUTDOWN' or command.startswith('PREPARE_SHUTDOWN|'):
             self._handle_prepare_shutdown(command, addr)

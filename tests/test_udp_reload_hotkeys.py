@@ -127,11 +127,16 @@ class UdpReloadCleanupHonestyTests(unittest.TestCase):
         owner._pending_restore['stuck'] = output_mute_pkg.EndpointSnapshot('stuck', '', False)
         owner._backend.add_render('stuck', muted=False, fail_set=True)
         prev = output_mute_pkg._OWNER
+        previous_config = sys.modules.get('config_client')
         output_mute_pkg._OWNER = owner
         try:
             controller._handle_command('RELOAD_HOTKEYS', ('127.0.0.1', 65300))
         finally:
             output_mute_pkg._OWNER = prev
+            if previous_config is not None:
+                sys.modules['config_client'] = previous_config
+            else:
+                sys.modules.pop('config_client', None)
 
         # 快捷键已实际切换（restart 成功），但清理未确认 → 不回执成功
         self.assertEqual(len(manager.restart_keys), 1)

@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -38,7 +41,12 @@ internal static partial class Desktop {
     static Border floatOuter;
     static System.Windows.Threading.DispatcherTimer waveTick;
     static readonly List<Rectangle> waveBars = new List<Rectangle>();
-    static double wavePhase;
+    static UdpClient meterSocket;
+    static bool meterSupported, floatResultVisible;
+    static double audioLevel;
+    static DateTime meterReceived, meterRequested, waveFrame;
+    static double waveOffset;
+    static UIElement floatHeading;
     static UIElement expandedFloat, compactFloat;
     static Slider glassSlider;
     static Button liveModeButton, batchModeButton;
@@ -219,17 +227,41 @@ internal static partial class Desktop {
     }
     static void SetFloatCollapsed(bool value) {
         floatCollapsed=value;
-        if (floatWindow==null || expandedFloat==null || compactFloat==null) return;
-        expandedFloat.Visibility=value?Visibility.Collapsed:Visibility.Visible;
-        compactFloat.Visibility=value?Visibility.Visible:Visibility.Collapsed;
-        floatWindow.Width=value?116:320;
-        floatWindow.Height=value?56:108;
-        if (floatCollapseButton!=null) floatCollapseButton.Content="−";
-        var work=SystemParameters.WorkArea;
-        floatWindow.Left=Math.Max(work.Left,Math.Min(floatWindow.Left,work.Right-floatWindow.Width));
-        floatWindow.Top=Math.Max(work.Top,Math.Min(floatWindow.Top,work.Bottom-floatWindow.Height));
-        ApplyGlass();
+        floatResultVisible=false;
+        UpdateFloatLayout();
         SaveUiPrefs();
+    }
+    static void UpdateFloatLayout() {
+        if (floatWindow==null || expandedFloat==null || compactFloat==null) return;
+        bool expanded=!floatCollapsed || recording || processing || floatResultVisible;
+        expandedFloat.Visibility=expanded?Visibility.Visible:Visibility.Collapsed;
+        compactFloat.Visibility=expanded?Visibility.Collapsed:Visibility.Visible;
+        floatHeading.Visibility=recording || processing?Visibility.Collapsed:Visibility.Visible;
+        floatWindow.Width=expanded?360:116;
+        floatWindow.SizeToContent=expanded?SizeToContent.Height:SizeToContent.Manual;
+        if(!expanded)floatWindow.Height=56;
+        floatWindow.UpdateLayout();
+        var work=SystemParameters.WorkArea;
+        var source=PresentationSource.FromVisual(floatWindow);
+        if(source!=null && source.CompositionTarget!=null) {
+            var area=System.Windows.Forms.Screen.FromHandle(
+                new System.Windows.Interop.WindowInteropHelper(floatWindow).Handle).WorkingArea;
+            var transform=source.CompositionTarget.TransformFromDevice;
+            work=new Rect(transform.Transform(new Point(area.Left,area.Top)),
+                transform.Transform(new Point(area.Right,area.Bottom)));
+        }
+        floatWindow.Left=Math.Max(work.Left,Math.Min(floatWindow.Left,work.Right-floatWindow.Width));
+        double height=floatWindow.ActualHeight>0?floatWindow.ActualHeight:floatWindow.Height;
+        floatWindow.Top=Math.Max(work.Top,Math.Min(floatWindow.Top,work.Bottom-height));
+        ApplyGlass();
+    }
+    static bool ApplyFloatTopmost() {
+        if(floatWindow==null)return true;
+        floatWindow.Topmost=floatTopmost;
+        var handle=new System.Windows.Interop.WindowInteropHelper(floatWindow).Handle;
+        if(handle==IntPtr.Zero)return true;
+        // Reassert z-order even when WPF's property value has not changed; keep input focus.
+        return SetWindowPos(handle,new IntPtr(floatTopmost?-1:-2),0,0,0,0,0x0013);
     }
     static Ellipse ConnectionDot() {
         return new Ellipse { Width=8,Height=8,Fill=B(WarnHex),
@@ -267,8 +299,8 @@ internal static partial class Desktop {
         glyph.Children.Add(new Ellipse { Width=size>=50?18:15,Height=size>=50?18:15,
             Fill=T("#FFFFFF","#1D1F22"),HorizontalAlignment=HorizontalAlignment.Center,
             VerticalAlignment=VerticalAlignment.Center });
-        glyph.Children.Add(new Border { Width=size>=50?25:21,Height=size>=50?25:21,
-            CornerRadius=new CornerRadius(5),Background=T("#26282B","#F1F2F0"),
+        glyph.Children.Add(new Border { Width=size>=50?20:12,Height=size>=50?20:12,
+            CornerRadius=new CornerRadius(3),Background=T("#FFFFFF","#1D1F22"),
             HorizontalAlignment=HorizontalAlignment.Center,
             VerticalAlignment=VerticalAlignment.Center,
             Visibility=Visibility.Collapsed });
@@ -281,44 +313,84 @@ internal static partial class Desktop {
         if(glyph==null)return;
         glyph.Children[0].Visibility=active?Visibility.Collapsed:Visibility.Visible;
         glyph.Children[1].Visibility=active?Visibility.Visible:Visibility.Collapsed;
-        // 录音态=浅红底 + 深色方块；空闲=主按钮色对
-        button.Background=active?T("#EBDCD9","#4E3A3B"):T("#26282B","#EDEEEC");
+        button.Background=T("#26282B","#EDEEEC");
         button.ToolTip=active?"点击结束录音":"点击开始录音";
     }
-    static StackPanel WaveBars(int count) {
+    static Grid WaveBars(int count) {
         var row=new StackPanel { Orientation=Orientation.Horizontal,
-            VerticalAlignment=VerticalAlignment.Center,Opacity=0 };
+            Height=32,RenderTransform=new TranslateTransform() };
         for(int i=0;i<count;i++) {
-            var bar=new Rectangle { Width=3,Height=4,RadiusX=1.5,RadiusY=1.5,
-                Fill=T("#63666A","#E1E2DF"),Margin=new Thickness(2,0,2,0),
+            var bar=new Rectangle { Width=2,Height=2,RadiusX=1,RadiusY=1,
+                Fill=T("#33363A","#E7E8E6"),Margin=new Thickness(1.5,0,1.5,0),
                 VerticalAlignment=VerticalAlignment.Center,Tag=row };
             row.Children.Add(bar);waveBars.Add(bar);
         }
-        return row;
+        var viewport=new Grid { Width=count*5,Height=32,ClipToBounds=true,
+            VerticalAlignment=VerticalAlignment.Center };
+        viewport.Children.Add(row);
+        return viewport;
+    }
+    static bool ApplyMeterReply(string reply) {
+        double level;
+        if(reply==null || !reply.StartsWith("LEVEL|",StringComparison.Ordinal) ||
+            !Double.TryParse(reply.Substring(6),NumberStyles.Float,CultureInfo.InvariantCulture,out level) ||
+            Double.IsNaN(level) || Double.IsInfinity(level) || level<0 || level>1)return false;
+        audioLevel=level;meterReceived=DateTime.UtcNow;
+        return true;
+    }
+    static void ReadAudioMeter() {
+        if(!meterSupported)return;
+        try {
+            if(meterSocket==null) {
+                meterSocket=new UdpClient();
+                meterSocket.Connect(IPAddress.Loopback,6018);
+            }
+            while(meterSocket.Available>0) {
+                var remote=new IPEndPoint(IPAddress.Loopback,0);
+                ApplyMeterReply(Encoding.ASCII.GetString(meterSocket.Receive(ref remote)));
+            }
+            if((DateTime.UtcNow-meterRequested).TotalMilliseconds>=50) {
+                var request=Encoding.ASCII.GetBytes("LEVEL");
+                meterSocket.Send(request,request.Length);
+                meterRequested=DateTime.UtcNow;
+            }
+        } catch(SocketException) { audioLevel=0; }
+    }
+    static void AdvanceWave(double level, double elapsedMs) {
+        waveOffset+=Math.Max(0,Math.Min(100,elapsedMs))*.06;
+        while(waveOffset>=5) {
+            for(int i=0;i<waveBars.Count-1;i++)waveBars[i].Height=waveBars[i+1].Height;
+            if(waveBars.Count>0)
+                waveBars[waveBars.Count-1].Height=2+26.16*(level<.0025?0:Math.Min(1,level*8));
+            waveOffset-=5;
+        }
+        for(int i=0;i<waveBars.Count;i++) {
+            double edge=Math.Min(1,Math.Min(i,waveBars.Count-1-i)*5/20.0);
+            waveBars[i].Opacity=.45*(waveBars[i].Height>2?1:.5)*edge*edge*(3-2*edge);
+            ((TranslateTransform)((StackPanel)waveBars[i].Tag).RenderTransform).X=-waveOffset;
+        }
     }
     static void AnimateWave() {
-        wavePhase+=0.21;
-        if(compactRecord!=null)
-            compactRecord.Opacity=.82+.18*Math.Abs(Math.Sin(wavePhase*1.5));
-        for(int i=0;i<waveBars.Count;i++) {
-            double pulse=Math.Abs(Math.Sin(wavePhase+i*0.66));
-            double swell=Math.Abs(Math.Sin(wavePhase*0.43-i*0.32));
-            waveBars[i].Height=4+Math.Round((pulse*0.7+swell*0.3)*19);
-        }
+        ReadAudioMeter();
+        var now=DateTime.UtcNow;
+        AdvanceWave(recording && (now-meterReceived).TotalMilliseconds<250?audioLevel:0,
+            (now-waveFrame).TotalMilliseconds);
+        waveFrame=now;
     }
     static void UpdateWaveAnimation() {
         if(waveTick==null)return;
         bool active=recording && floatWindow!=null && floatWindow.IsVisible;
         if(active) {
-            if(!waveTick.IsEnabled)waveTick.Start();
+            if(!waveTick.IsEnabled){waveFrame=DateTime.UtcNow;waveTick.Start();}
         } else {
             if(waveTick.IsEnabled)waveTick.Stop();
-            if(compactRecord!=null)compactRecord.Opacity=1;
+            if(meterSocket!=null){meterSocket.Close();meterSocket=null;}
+            audioLevel=0;meterReceived=meterRequested=DateTime.MinValue;waveOffset=0;
         }
         foreach(var bar in waveBars) {
             var row=bar.Tag as StackPanel;
-            if(row!=null)row.Opacity=active?1:0;
-            if(!active)bar.Height=4;
+            if(row!=null)row.Opacity=recording?1:.3;
+            if(!active){bar.Height=2;((TranslateTransform)row.RenderTransform).X=0;}
         }
     }
     static void ApplyGlass() {

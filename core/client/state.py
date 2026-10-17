@@ -61,6 +61,7 @@ class ClientState:
 
     recording: bool = False
     recording_start_time: float = 0.0
+    audio_level: tuple[float, float] = (0.0, 0.0)  # monotonic time, microphone RMS
     audio_files: Dict[str, Path] = field(default_factory=dict)
 
     # 桌面端 PREPARE_SHUTDOWN 闩锁：确认"已停止录音且输出静音已恢复"之后、
@@ -106,6 +107,7 @@ class ClientState:
         # 重置其他状态
         self.recording = False
         self.recording_start_time = 0.0
+        self.audio_level = (0.0, 0.0)
         self.audio_files.clear()
         
         logger.debug("客户端状态重置完成")
@@ -117,6 +119,7 @@ class ClientState:
         Args:
             start_time: 录音开始的时间戳
         """
+        self.audio_level = (0.0, 0.0)
         self.recording = True
         self.recording_start_time = start_time
         logger.debug(f"录音状态已更新: recording=True, start_time={start_time:.2f}")
@@ -134,6 +137,7 @@ class ClientState:
         
         self.recording = False
         self.recording_start_time = 0.0
+        self.audio_level = (0.0, 0.0)
         logger.debug(f"录音状态已更新: recording=False, duration={duration:.2f}s")
         return duration
     

@@ -76,6 +76,9 @@ class AudioStreamManager:
         if not self.state.recording:
             return
 
+        rms = float(np.sqrt(np.mean(np.square(indata, dtype=np.float64)))) if indata.size else 0.0
+        self.state.audio_level = (time.monotonic(), rms if np.isfinite(rms) else 0.0)
+
         import asyncio
 
         # 将数据放入队列

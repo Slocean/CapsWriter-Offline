@@ -70,10 +70,27 @@ jobs:
           python-version: "3.12"
 
       - name: Install client requirements
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements-client.txt
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-client.txt pytest
 
       - name: Validate version and announcement
         run: python scripts/validate_release.py
+
+      - name: Test client before packaging
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+          LOCALAPPDATA: ${{ runner.temp }}/capswriter-test-user
+        run: >
+          python -m pytest
+          tests/test_audio_meter.py tests/test_desktop_result_options.py
+          tests/test_desktop_save.py tests/test_client_connection.py
+          tests/test_live_output.py tests/test_pause_segmenter.py
+          tests/test_result_text_event.py tests/test_app_hotkey_reload.py
+          tests/test_recording_mute_lifecycle.py
+          tests/test_output_mute_owner.py tests/test_output_mute_packaging.py
+          tests/test_lifecycle_telemetry.py
+          tests/test_udp_stop_ack.py tests/test_udp_reload_hotkeys.py
+          -q --tb=short -p no:cacheprovider
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress

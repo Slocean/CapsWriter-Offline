@@ -106,6 +106,9 @@ class DesktopSaveBehaviorTests(unittest.TestCase):
     def setUpClass(cls):
         cls._tmp = tempfile.TemporaryDirectory()
         cls.dll = pathlib.Path(cls._tmp.name) / 'CapsWriterDesktop.test.dll'
+        version = pathlib.Path(cls._tmp.name) / 'Version.cs'
+        version.write_text('internal static partial class Desktop { internal const string AppVersion = "'
+                           + (REPO / 'installer/version.txt').read_text().strip() + '"; }')
         FX = CSC.parent
         args = [str(CSC), '-nologo', '-target:library', f'-out:{cls.dll}',
                 f'-reference:{FX}/WPF/PresentationFramework.dll',
@@ -116,7 +119,7 @@ class DesktopSaveBehaviorTests(unittest.TestCase):
                 '-reference:System.Windows.Forms.dll',
                 str(DESKTOP / 'CapsWriterDesktop.cs'), str(DESKTOP / 'Shortcuts.cs'),
                 str(DESKTOP / 'Visuals.cs'), str(DESKTOP / 'Update.cs'),
-                str(DESKTOP / 'AppVersion.generated.cs')]
+                str(version)]
         proc = subprocess.run(args, capture_output=True, text=True, timeout=180)
         cls.compile_output = proc.stdout + proc.stderr
         assert proc.returncode == 0, f'C# 编译失败：{cls.compile_output}'

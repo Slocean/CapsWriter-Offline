@@ -29,6 +29,8 @@ internal static partial class Desktop {
     static extern bool ShowWindow(IntPtr h, int command);
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     static extern bool SetForegroundWindow(IntPtr h);
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
+    static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int width, int height, uint flags);
 
     static readonly string Dir = AppDomain.CurrentDomain.BaseDirectory;
     static readonly string Exe = Path.Combine(Dir, "start_client.exe");
@@ -39,13 +41,13 @@ internal static partial class Desktop {
     static Forms.NotifyIcon tray;
     static Process backend;
     static DispatcherTimer tick;
-    static TextBox host, port, seconds, contextWords, logBox, urlField, transcript;
+    static TextBox host, port, seconds, contextWords, logBox, urlField, transcript, floatTranscript;
     static PasswordBox apiKeyField;
-    static TextBlock status, floatStatus, floatDetail, heroHint, sideStatus, apiKeyHint, serverHint;
+    static TextBlock status, floatStatus, heroHint, sideStatus, apiKeyHint, serverHint;
     static UIElement lanFields, remoteFields;
     static Button lanModeButton, remoteModeButton;
     static Ellipse sideDot, floatConnectionDot;
-    static Button mainRecord, floatRecord;
+    static Button mainRecord, floatRecord, copyResult;
     static CheckBox showFloat;
     static bool connected, recording, exiting, ownsBackend, remoteMode;
     // 启动回放分离：GUI 启动/接入时记录日志文件的字节末尾作为历史边界；
@@ -360,7 +362,14 @@ internal static partial class Desktop {
         body.Children.Add(Surface(modePanel,19));
 
         var result=new StackPanel();
-        result.Children.Add(Text("识别文字",13,"#33363A","#E7E8E6",true));
+        var resultHeader=new DockPanel();
+        copyResult=ThemeButton("复制","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",7);
+        copyResult.Width=64;copyResult.Height=28;
+        copyResult.ToolTip="复制全部识别文字";copyResult.IsEnabled=false;
+        copyResult.Click+=(s,e)=>CopyResult(false);
+        DockPanel.SetDock(copyResult,Dock.Right);resultHeader.Children.Add(copyResult);
+        resultHeader.Children.Add(Text("识别文字",13,"#33363A","#E7E8E6",true));
+        result.Children.Add(resultHeader);
         transcript=new TextBox { Text="等待录音。你说的话会出现在这里。",IsReadOnly=true,
             TextWrapping=TextWrapping.Wrap,MaxHeight=120,MinHeight=40,
             VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
@@ -490,8 +499,8 @@ internal static partial class Desktop {
         appearance.Children.Add(showFloat);
         var pin=Switch("浮窗始终置于最顶层");
         pin.IsChecked=floatTopmost;pin.Margin=new Thickness(0,13,0,0);
-        pin.Checked+=(s,e)=>{floatTopmost=true;if(floatWindow!=null)floatWindow.Topmost=true;SaveUiPrefs();};
-        pin.Unchecked+=(s,e)=>{floatTopmost=false;if(floatWindow!=null)floatWindow.Topmost=false;SaveUiPrefs();};
+        pin.Checked+=(s,e)=>{floatTopmost=true;ApplyFloatTopmost();SaveUiPrefs();};
+        pin.Unchecked+=(s,e)=>{floatTopmost=false;ApplyFloatTopmost();SaveUiPrefs();};
         appearance.Children.Add(pin);
         var glassRow=new Grid { Margin=new Thickness(0,13,0,0) };
         glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(90) });
@@ -532,7 +541,7 @@ internal static partial class Desktop {
     }
 
     static void BuildFloat() {
-        floatWindow=new Window { Width=floatCollapsed?116:320,Height=floatCollapsed?56:108,
+        floatWindow=new Window { Width=floatCollapsed?116:360,Height=floatCollapsed?56:108,
             WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.NoResize,
             AllowsTransparency=true,Background=Brushes.Transparent,
             Topmost=floatTopmost,ShowInTaskbar=false,ShowActivated=false,
@@ -546,7 +555,9 @@ internal static partial class Desktop {
             var h=new WindowInteropHelper(floatWindow).Handle;
             SetWindowLong(h,-20,GetWindowLong(h,-20)|0x08000000|0x80);
             ApplyGlass();
+            ApplyFloatTopmost();
         };
+        floatWindow.IsVisibleChanged+=(s,e)=>{ApplyFloatTopmost();UpdateWaveAnimation();};
         floatWindow.LocationChanged+=(s,e)=>{
             if(!layoutReady)return;
             floatLeft=floatWindow.Left;floatTop=floatWindow.Top;
@@ -555,14 +566,14 @@ internal static partial class Desktop {
             if(!exiting){e.Cancel=true;floatWindow.Hide();showFloat.IsChecked=false;}
         };
         floatOuter=new Border { BorderBrush=T("#55FFFFFF","#44FFFFFF"),
-            BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(26),
-            Padding=new Thickness(10,6,10,6) };
+            BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(20),
+            Padding=new Thickness(12,8,12,8) };
         var layers=new Grid();
 
         var expanded=new Grid();
-        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(22) });
-        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
-        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(16) });
+        expanded.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
+        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(44) });
+        expanded.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
         var top=new Grid();
         top.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         top.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
@@ -582,30 +593,26 @@ internal static partial class Desktop {
         close.Click+=(s,e)=>{floatWindow.Hide();showFloat.IsChecked=false;};
         var topActions=WindowActions(floatCollapseButton,close);
         Grid.SetColumn(topActions,1);top.Children.Add(topActions);
-        expanded.Children.Add(top);
+        expanded.Children.Add(top);floatHeading=top;
 
         var recorder=new Grid();
         recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        var leftWave=WaveBars(5);
-        leftWave.HorizontalAlignment=HorizontalAlignment.Right;
-        leftWave.Margin=new Thickness(0,0,13,0);
-        recorder.Children.Add(leftWave);
-        floatRecord=RecordButton(52);
+        var waveform=WaveBars(56);
+        waveform.HorizontalAlignment=HorizontalAlignment.Center;
+        recorder.Children.Add(waveform);
+        floatRecord=RecordButton(36);
+        floatRecord.Margin=new Thickness(12,0,0,0);
         floatRecord.Click+=(s,e)=>ToggleRecording();
         Grid.SetColumn(floatRecord,1);recorder.Children.Add(floatRecord);
-        var rightWave=WaveBars(5);
-        rightWave.HorizontalAlignment=HorizontalAlignment.Left;
-        rightWave.Margin=new Thickness(13,0,0,0);
-        Grid.SetColumn(rightWave,2);recorder.Children.Add(rightWave);
         Grid.SetRow(recorder,1);expanded.Children.Add(recorder);
-        floatDetail=Text("等待客户端连接",11,"#5C5E60","#C5C6C7");
-        floatDetail.TextTrimming=TextTrimming.CharacterEllipsis;
-        floatDetail.MaxWidth=292;
-        floatDetail.TextAlignment=TextAlignment.Center;
-        floatDetail.HorizontalAlignment=HorizontalAlignment.Center;
-        Grid.SetRow(floatDetail,2);expanded.Children.Add(floatDetail);
+        floatTranscript=new TextBox { IsReadOnly=true,TextWrapping=TextWrapping.Wrap,
+            MinHeight=22,MaxHeight=96,FontSize=13,Margin=new Thickness(2,4,2,2),
+            VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,
+            Background=Brushes.Transparent,Foreground=T("#33363A","#E7E8E6"),
+            BorderThickness=new Thickness(0),Padding=new Thickness(0) };
+        Grid.SetRow(floatTranscript,2);expanded.Children.Add(floatTranscript);
         layers.Children.Add(expanded);expandedFloat=expanded;
 
         var compact=new StackPanel { Orientation=Orientation.Horizontal,
@@ -627,7 +634,7 @@ internal static partial class Desktop {
         compact.Visibility=floatCollapsed?Visibility.Visible:Visibility.Collapsed;
         expanded.Visibility=floatCollapsed?Visibility.Collapsed:Visibility.Visible;
         layers.Children.Add(compact);compactFloat=compact;
-        waveTick=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(55) };
+        waveTick=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(16) };
         waveTick.Tick+=(s,e)=>AnimateWave();
         floatOuter.Child=layers;
         floatOuter.MouseLeftButtonDown+=(s,e)=>{
@@ -638,6 +645,7 @@ internal static partial class Desktop {
         floatWindow.Content=floatOuter;
         ApplyGlass();
         layoutReady=true;
+        UpdateFloatLayout();
     }
 
     sealed class TrayColors : Forms.ProfessionalColorTable {
@@ -1022,6 +1030,7 @@ internal static partial class Desktop {
     static void ApplyStateReply(string reply) {
         if(reply==null || !reply.StartsWith("STATE|")) return;
         bool rec=recording; long startedEpoch=0;
+        meterSupported=false;
         var parts=reply.Split('|');
         foreach(var p in parts) {
             if(p.StartsWith("recording=")) rec=p=="recording=1";
@@ -1029,6 +1038,7 @@ internal static partial class Desktop {
             else if(p.StartsWith("started=")) long.TryParse(p.Substring(8),
                 System.Globalization.NumberStyles.Integer,
                 System.Globalization.CultureInfo.InvariantCulture,out startedEpoch);
+            else if(p=="meter=1") meterSupported=true;
         }
         recording=rec;
         if(rec && startedEpoch>0)
@@ -1190,6 +1200,15 @@ internal static partial class Desktop {
         string id=line.Substring(i+marker.Length).Trim();
         return id.Length>0?id:null;
     }
+    static void CopyResult(bool automatic) {
+        if(String.IsNullOrWhiteSpace(lastText))return;
+        try {
+            Clipboard.SetDataObject(lastText,true);
+            if(!automatic)copyResult.Content="已复制";
+        } catch(System.Runtime.InteropServices.ExternalException) {
+            AppendLog((automatic?"自动复制失败":"复制失败")+"：剪贴板被占用，请点击复制按钮重试。");
+        }
+    }
     static void ProcessLine(string line) { ProcessLine(line,false); }
     static void ProcessLine(string line, bool historical) {
         const string textEvent="任务生命周期: 文字 ";
@@ -1203,10 +1222,8 @@ internal static partial class Desktop {
             if(String.IsNullOrWhiteSpace(piece))return;
             finalText=liveMode?finalText+piece:piece;
             lastText=finalText;
-            if(autoCopy) {
-                try { Clipboard.SetDataObject(lastText,true); }
-                catch(System.Runtime.InteropServices.ExternalException) { AppendLog("自动复制失败：剪贴板被占用，可在识别文字框中手动复制。"); }
-            }
+            floatResultVisible=true;
+            if(autoCopy)CopyResult(true);
             return;
         }
         if(line.Contains("WebSocket 建立成功")) { if(!historical) connected=true; }
@@ -1216,7 +1233,7 @@ internal static partial class Desktop {
         if((taskId=TaskEventId(line,"任务生命周期: 提交 "))!=null) { if(!historical) pendingTasks.Add(taskId); }
         else if((taskId=TaskEventId(line,"任务生命周期: 完成 "))!=null) { if(!historical) pendingTasks.Remove(taskId); }
         else if((taskId=TaskEventId(line,"任务生命周期: 发送失败 "))!=null) { if(!historical) pendingTasks.Remove(taskId); }
-        if(line.Contains("触发：开始录音")) { if(!historical) { recording=true; started=DateTime.Now; lastText=""; finalText=""; } }
+        if(line.Contains("触发：开始录音")) { if(!historical) { recording=true; started=DateTime.Now; lastText=""; finalText=""; floatResultVisible=false; } }
         if(line.Contains("释放：完成录音")) { if(!historical) recording=false; }
         // 取消/错误只结束录音本身；不清 pendingTasks（旧在途任务不受影响）
         if(line.Contains("录音任务被取消")||line.Contains("取消录音任务")) { if(!historical) recording=false; }
@@ -1225,7 +1242,10 @@ internal static partial class Desktop {
         if(line.Contains("忽略 STOP 命令")) { if(!historical) recording=false; }
         if(line.Contains("忽略 START 命令")) { if(!historical) { recording=true; started=DateTime.Now; } }
         int interim=line.IndexOf("实时识别片段:",StringComparison.Ordinal);
-        if(interim>=0 && !historical) lastText=finalText+line.Substring(interim+"实时识别片段:".Length).Trim();
+        if(interim>=0 && !historical) {
+            lastText=finalText+line.Substring(interim+"实时识别片段:".Length).Trim();
+            floatResultVisible=lastText.Length>0;
+        }
         int final=line.IndexOf("收到最终识别结果:",StringComparison.Ordinal);
         if(line.Contains("实时输入已暂停") || line.Contains("最终文字未输入")) AppendLog(line);
         else if(line.Contains("任务生命周期")||line.Contains("服务端未连接")||
@@ -1312,11 +1332,17 @@ internal static partial class Desktop {
         floatOuter.BorderBrush=floatReady?T("#55FFFFFF","#44FFFFFF"):B(WarnHex);
         floatStatus.Text=recording?(DateTime.Now-started).ToString(@"mm\:ss"):
             processing?"识别中":"";
-        floatDetail.Text=lastText.Length>0?
-            (lastText.Length>28?"…"+lastText.Substring(lastText.Length-28):lastText):
-            recording?"边说边输入当前应用":processing?"正在识别，请稍候":ServerDisplay();
+        string floatText=lastText.Length>0?lastText:
+            recording?"正在聆听…":processing?"正在识别，请稍候…":ServerDisplay();
+        if(floatTranscript.Text!=floatText) {
+            floatTranscript.Text=floatText;
+            floatTranscript.ScrollToEnd();
+        }
         string displayText=lastText.Length>0?lastText:"等待录音。你说的话会出现在这里。";
-        if(transcript.Text!=displayText)transcript.Text=displayText;
+        if(transcript.Text!=displayText){transcript.Text=displayText;copyResult.Content="复制";}
+        copyResult.IsEnabled=!String.IsNullOrWhiteSpace(lastText);
+        UpdateFloatLayout();
+        if(floatTopmost && floatWindow.IsVisible)ApplyFloatTopmost();
         // 录制按钮：录音=结束方块；识别等待=旋转指示 + “识别中”；空闲=开始
         // （内容对象在进入该状态时只创建一次，避免每 tick 重建重置旋转角）
         if(processing && !recording) {
