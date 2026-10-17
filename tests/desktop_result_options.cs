@@ -98,8 +98,6 @@ internal static partial class Desktop {
         using(tray=new System.Windows.Forms.NotifyIcon()) {
             UpdateDisplay();
             Check(transcript.Text==lastText,"result is not truncated at 160 characters");
-            Check(floatTranscript.Text==lastText && floatTranscript.TextWrapping==TextWrapping.Wrap,
-                "full result below waveform, without 28-character clipping");
             Check(copyResult.IsEnabled && DockPanel.GetDock(copyResult)==Dock.Right,"copy button at heading right");
             transcript.Select(3,10);
             UpdateDisplay();UpdateDisplay();
@@ -129,7 +127,7 @@ internal static partial class Desktop {
         Console.WriteLine("PASS: full-text copy button, native topmost repair, microphone waveform, floating transcript and preferences");
     }
     static void CheckWaveform() {
-        Check(waveBars.Count==56 && waveBars[0].Width==2,"thin waveform geometry");
+        Check(waveBars.Count==18 && waveBars[0].Width==2,"thin waveform geometry");
         AdvanceWave(.05,100);
         double spoken=waveBars[waveBars.Count-1].Height;
         Check(spoken>2,"speech increases waveform height");
@@ -159,30 +157,98 @@ internal static partial class Desktop {
         Check(!meterSupported,"old backend does not receive unsupported high-frequency requests");
         meterReceived=DateTime.UtcNow.AddSeconds(-1);waveFrame=DateTime.UtcNow.AddMilliseconds(-100);
         AnimateWave();Check(waveBars[waveBars.Count-1].Height==2,"stale audio falls back to silence");
-        floatCollapsed=true;recording=true;UpdateFloatLayout();
-        Check(expandedFloat.Visibility==Visibility.Visible && floatWindow.Width==360,"recording expands compact window");
-        recording=false;floatResultVisible=true;UpdateFloatLayout();
-        Check(expandedFloat.Visibility==Visibility.Visible,"recognized text stays visible after recording");
-        SetFloatCollapsed(true);
-        Check(compactFloat.Visibility==Visibility.Visible && floatWindow.Width==116,"manual collapse still works");
-        SetFloatCollapsed(false);recording=true;connected=true;started=DateTime.Now;
+        CheckFloatStates();
+        recording=true;connected=true;started=DateTime.Now;
         backend=System.Diagnostics.Process.GetCurrentProcess();
         lastText="这是语音输入的识别文字。\n声波随麦克风音量变化，识别结果显示在下方。";
         ApplyTheme();
         using(tray=new System.Windows.Forms.NotifyIcon())UpdateDisplay();
-        for(int i=0;i<56;i++)AdvanceWave(i%11<7?.02+(i%7)*.012:0,84);
+        for(int i=0;i<18;i++)AdvanceWave(i%11<7?.02+(i%7)*.012:0,84);
         string preview=Environment.GetEnvironmentVariable("CAPSWRITER_UI_PREVIEW_DIR");
         if(!String.IsNullOrEmpty(preview)) {
             Directory.CreateDirectory(preview);
-            RenderPreview(floatOuter,360,System.IO.Path.Combine(preview,"recording.png"));
+            RenderPreview(floatOuter,220,System.IO.Path.Combine(preview,"listening.png"));
+            recording=false;pendingTasks.Add("preview");UpdateFloatLayout();
+            waveFrame=DateTime.UtcNow.AddMilliseconds(-80);AnimateWave();
+            RenderPreview(floatOuter,220,System.IO.Path.Combine(preview,"recognizing.png"));
+            pendingTasks.Clear();floatCompleted=true;UpdateFloatLayout();
+            RenderPreview(floatOuter,220,System.IO.Path.Combine(preview,"complete.png"));
+            floatCompleted=false;UpdateFloatLayout();
+            RenderPreview(floatOuter,56,System.IO.Path.Combine(preview,"idle.png"));
             RenderPreview((FrameworkElement)transcript.Parent,500,System.IO.Path.Combine(preview,"copy-result.png"));
         }
         recording=false;backend=null;UpdateWaveAnimation();
         foreach(var bar in waveBars)Check(bar.Height==2,"recording stop resets waveform");
     }
+    static void CheckFloatStates() {
+        pendingTasks.Clear();recording=false;floatCompleted=false;floatCancelled=false;
+        UpdateFloatLayout();
+        Check(floatState==FloatState.Idle && floatWindow.Width==56 && floatWindow.Height==56,"idle is a single microphone icon");
+        Check(floatStart.Visibility==Visibility.Visible && floatWave.Visibility==Visibility.Collapsed,"idle has no wave or extra controls");
+        var colors=new System.Windows.Media.Color[2];
+        for(int theme=0;theme<2;theme++) {
+            darkTheme=theme==1;ApplyTheme();colors[theme]=((SolidColorBrush)floatOuter.Background).Color;
+            foreach(FloatState state in Enum.GetValues(typeof(FloatState))) {
+                recording=state==FloatState.Listening;pendingTasks.Clear();
+                if(state==FloatState.Recognizing)pendingTasks.Add("checking");
+                floatCompleted=state==FloatState.Complete;
+                UpdateFloatLayout();
+                Check(floatState==state,"four states follow actual recording and task completion");
+                Check(((SolidColorBrush)floatOuter.Background).Color==colors[theme],"background and opacity remain unchanged across states");
+                Check(floatWindow.Height==56 && floatWindow.Width==(state==FloatState.Idle?56:220),"fixed capsule geometry without text row");
+                bool listening=state==FloatState.Listening;
+                Check((floatCancel.Visibility==Visibility.Visible)==listening &&
+                    (floatRecord.Visibility==Visibility.Visible)==listening,"side controls appear only while listening");
+                floatOuter.Measure(new Size(floatWindow.Width,56));
+                floatOuter.Arrange(new Rect(0,0,floatWindow.Width,56));floatOuter.UpdateLayout();
+                if(listening) {
+                    var left=floatCancel.TransformToAncestor(floatOuter).TransformBounds(new Rect(0,0,44,44));
+                    var right=floatRecord.TransformToAncestor(floatOuter).TransformBounds(new Rect(0,0,44,44));
+                    var wave=floatWave.TransformToAncestor(floatOuter).TransformBounds(new Rect(0,0,floatWave.Width,32));
+                    Check(left.Left>=0 && right.Right<=220 && left.Right<wave.Left && wave.Right<right.Left,
+                        "44px controls and waveform fit without overlap");
+                } else if(state==FloatState.Idle || state==FloatState.Complete) {
+                    var icon=floatStart.TransformToAncestor(floatOuter).Transform(new Point(22,22));
+                    Check(Math.Abs(icon.X-floatWindow.Width/2)<1 && Math.Abs(icon.Y-28)<1,"idle and completion icons stay centered");
+                }
+                if(state==FloatState.Complete)
+                    Check(((System.Windows.Shapes.Path)floatStart.Content).Data.ToString()==FloatGlyph("confirm").Data.ToString(),"completed glyph matches right confirmation check");
+            }
+        }
+        Check(colors[0]!=colors[1],"existing light and dark palettes retained");
+        pendingTasks.Clear();floatCompleted=false;recording=true;floatCancelled=false;
+        ProcessLine("任务生命周期: 提交 first");ProcessLine("任务生命周期: 提交 second");
+        ProcessLine(TextEvent("第一段"));UpdateFloatLayout();
+        Check(floatState==FloatState.Listening,"a phrase result does not interrupt recording");
+        ProcessLine("释放：完成录音");ProcessLine("任务生命周期: 完成 first");UpdateFloatLayout();
+        Check(floatState==FloatState.Recognizing,"wait for every submitted segment");
+        waveFrame=DateTime.UtcNow.AddMilliseconds(-80);AnimateWave();
+        double firstHeight=waveBars[0].Height;
+        waveFrame=DateTime.UtcNow.AddMilliseconds(-80);AnimateWave();
+        Check(waveBars[0].Height!=firstHeight && floatWave.Width==70,"recognizing has a compact animated centered wave");
+        ProcessLine("任务生命周期: 完成 second");UpdateFloatLayout();
+        Check(floatState==FloatState.Complete,"completion check waits until pending tasks drain");
+        ProcessLine("触发：开始录音");UpdateFloatLayout();
+        Check(floatState==FloatState.Listening && !floatCompleted,"new recording clears prior completion");
+        Check(!ApplyCancelReply(null) && recording,"missing cancel acknowledgement cannot fake success");
+        Check(ApplyCancelReply("CANCELLED") && !recording,"confirmed cancellation ends listening");
+        ProcessLine(TextEvent("取消后的在途结果"));UpdateFloatLayout();
+        Check(floatState==FloatState.Idle && lastText.Contains("取消后的在途结果"),"late results after cancel stay in main text without a false check");
+        ProcessLine("触发：开始录音");ProcessLine("释放：完成录音");UpdateFloatLayout();
+        Check(floatState==FloatState.Idle,"empty recording cannot show a success check");
+        ProcessLine("任务生命周期: 提交 failed");ProcessLine("任务生命周期: 发送失败 failed");UpdateFloatLayout();
+        Check(floatState==FloatState.Idle,"failed recognition cannot show a success check");
+        floatCompleted=true;ProcessLine("WebSocket 断开");UpdateFloatLayout();
+        Check(floatState==FloatState.Idle,"disconnect cannot leave a stale completion check");
+        floatCompleted=true;
+        ProcessLine("历史开始 触发：开始录音",true);UpdateFloatLayout();
+        Check(floatState==FloatState.Complete,"historical lines cannot change current completion");
+        floatCompleted=false;pendingTasks.Clear();
+    }
     static void RenderPreview(FrameworkElement element,int width,string path) {
         element.Measure(new Size(width,Double.PositiveInfinity));
-        element.Arrange(new Rect(0,0,width,element.DesiredSize.Height));element.UpdateLayout();
+        double height=element==floatOuter?floatWindow.Height:element.DesiredSize.Height;
+        element.Arrange(new Rect(0,0,width,height));element.UpdateLayout();
         var image=new RenderTargetBitmap(width,(int)Math.Ceiling(element.ActualHeight),96,96,PixelFormats.Pbgra32);
         image.Render(element);
         var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(image));

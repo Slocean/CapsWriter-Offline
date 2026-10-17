@@ -32,9 +32,15 @@ class _FakeTask:
     def __init__(self, recording=True):
         self.is_recording = recording
         self.finished = False
+        self.cancelled = False
 
     def finish(self):
         self.finished = True
+
+    def cancel(self):
+        self.cancelled = True
+        self.is_recording = False
+
 
 
 class _FakeManager:
@@ -78,6 +84,30 @@ class UdpStopAckTests(unittest.TestCase):
 
         self.assertFalse(manager.tasks['caps_lock'].finished)
         self.assertEqual(controller._sock.sent, [(b'STOPPED', addr)])
+
+    def test_cancel_active_tasks_before_ack_without_submitting(self):
+        controller, manager = self._controller(recording=True)
+        def reply(data, addr):
+            self.assertTrue(manager.control_task.cancelled)
+            self.assertTrue(manager.tasks['caps_lock'].cancelled)
+            self.assertFalse(manager.control_task.finished)
+            controller._sock.sent.append((data, addr))
+        controller._sock.sendto = reply
+        addr = ('127.0.0.1', 50006)
+        controller._handle_command('CANCEL', addr)
+        controller._handle_command('CANCEL', addr)
+        self.assertEqual(controller._sock.sent, [(b'CANCELLED', addr)] * 2)
+
+    def test_cancel_idle_does_not_cancel_pending_recognition(self):
+        controller, manager = self._controller(recording=False)
+        manager.control_task.is_recording = False
+        addr = ('127.0.0.1', 50007)
+        controller._handle_command('CANCEL', addr)
+        self.assertFalse(manager.control_task.cancelled)
+        self.assertFalse(manager.tasks['caps_lock'].cancelled)
+        self.assertEqual(controller._sock.sent, [(b'CANCELLED', addr)])
+
+
 
     def test_send_failure_does_not_break_stop(self):
         controller, manager = self._controller(recording=True)

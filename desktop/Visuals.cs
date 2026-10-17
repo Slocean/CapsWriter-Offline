@@ -13,7 +13,6 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Rectangle = System.Windows.Shapes.Rectangle;
-using Ellipse = System.Windows.Shapes.Ellipse;
 
 internal static partial class Desktop {
     sealed class ThemeInk : INotifyPropertyChanged {
@@ -30,24 +29,24 @@ internal static partial class Desktop {
     }
     static readonly Dictionary<string, ThemeInk> inks = new Dictionary<string, ThemeInk>();
     static bool darkTheme;
-    static bool floatCollapsed;
     static bool autoCopy;
     static bool floatTopmost=true;
     static double glassStrength = 55;
     static double floatLeft = Double.NaN, floatTop = Double.NaN;
     static string UiPrefsPath { get { return Path.Combine(Dir, "desktop_ui.ini"); } }
-    static Button themeButton, floatCollapseButton, compactRecord;
+    static Button themeButton, floatStart, floatCancel;
     static TextBlock glassValue;
     static Border floatOuter;
     static System.Windows.Threading.DispatcherTimer waveTick;
     static readonly List<Rectangle> waveBars = new List<Rectangle>();
     static UdpClient meterSocket;
-    static bool meterSupported, floatResultVisible;
+    enum FloatState { Idle, Listening, Recognizing, Complete }
+    static FloatState floatState;
+    static bool meterSupported, floatCompleted, floatCancelled;
     static double audioLevel;
     static DateTime meterReceived, meterRequested, waveFrame;
-    static double waveOffset;
-    static UIElement floatHeading;
-    static UIElement expandedFloat, compactFloat;
+    static double waveOffset, recognitionPhase;
+    static Grid floatWave;
     static Slider glassSlider;
     static Button liveModeButton, batchModeButton;
     static TextBlock modeHint;
@@ -203,7 +202,6 @@ internal static partial class Desktop {
                 if (key=="theme") darkTheme=value=="dark";
                 else if (key=="glass" && Double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out n))
                     glassStrength=Math.Max(0,Math.Min(100,n));
-                else if (key=="collapsed") floatCollapsed=value=="1";
                 else if (key=="auto_copy") autoCopy=value=="1";
                 else if (key=="float_topmost") floatTopmost=value=="1";
                 else if (key=="left" && Double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out n))
@@ -217,7 +215,6 @@ internal static partial class Desktop {
         try {
             string data="theme="+(darkTheme?"dark":"light")+"\n"+
                 "glass="+glassStrength.ToString("F0",CultureInfo.InvariantCulture)+"\n"+
-                "collapsed="+(floatCollapsed?"1":"0")+"\n"+
                 "auto_copy="+(autoCopy?"1":"0")+"\n"+
                 "float_topmost="+(floatTopmost?"1":"0")+"\n"+
                 "left="+floatLeft.ToString("F0",CultureInfo.InvariantCulture)+"\n"+
@@ -225,21 +222,28 @@ internal static partial class Desktop {
             File.WriteAllText(UiPrefsPath,data);
         } catch (IOException) {} catch (UnauthorizedAccessException) {}
     }
-    static void SetFloatCollapsed(bool value) {
-        floatCollapsed=value;
-        floatResultVisible=false;
-        UpdateFloatLayout();
-        SaveUiPrefs();
-    }
     static void UpdateFloatLayout() {
-        if (floatWindow==null || expandedFloat==null || compactFloat==null) return;
-        bool expanded=!floatCollapsed || recording || processing || floatResultVisible;
-        expandedFloat.Visibility=expanded?Visibility.Visible:Visibility.Collapsed;
-        compactFloat.Visibility=expanded?Visibility.Collapsed:Visibility.Visible;
-        floatHeading.Visibility=recording || processing?Visibility.Collapsed:Visibility.Visible;
-        floatWindow.Width=expanded?360:116;
-        floatWindow.SizeToContent=expanded?SizeToContent.Height:SizeToContent.Manual;
-        if(!expanded)floatWindow.Height=56;
+        if(floatWindow==null || floatStart==null)return;
+        var next=recording?FloatState.Listening:floatCancelled?FloatState.Idle:
+            processing?FloatState.Recognizing:floatCompleted?FloatState.Complete:FloatState.Idle;
+        if(next!=floatState) {
+            floatStart.Content=FloatGlyph(next==FloatState.Complete?"confirm":"microphone");
+            waveOffset=0;recognitionPhase=0;waveFrame=DateTime.UtcNow;
+            foreach(var bar in waveBars) {
+                bar.Height=2;
+                ((TranslateTransform)((StackPanel)bar.Tag).RenderTransform).X=0;
+            }
+        }
+        floatState=next;
+        bool listening=next==FloatState.Listening, recognizing=next==FloatState.Recognizing;
+        floatCancel.Visibility=floatRecord.Visibility=listening?Visibility.Visible:Visibility.Collapsed;
+        floatWave.Visibility=listening || recognizing?Visibility.Visible:Visibility.Collapsed;
+        floatStart.Visibility=listening || recognizing?Visibility.Collapsed:Visibility.Visible;
+        floatWave.Width=recognizing?70:90;
+        for(int i=0;i<waveBars.Count;i++)waveBars[i].Visibility=recognizing && i>=14?Visibility.Collapsed:Visibility.Visible;
+        floatWindow.Width=next==FloatState.Idle?56:220;
+        floatWindow.Height=56;
+        floatWindow.SizeToContent=SizeToContent.Manual;
         floatWindow.UpdateLayout();
         var work=SystemParameters.WorkArea;
         var source=PresentationSource.FromVisual(floatWindow);
@@ -263,58 +267,27 @@ internal static partial class Desktop {
         // Reassert z-order even when WPF's property value has not changed; keep input focus.
         return SetWindowPos(handle,new IntPtr(floatTopmost?-1:-2),0,0,0,0,0x0013);
     }
-    static Ellipse ConnectionDot() {
-        return new Ellipse { Width=8,Height=8,Fill=B(WarnHex),
-            VerticalAlignment=VerticalAlignment.Center,ToolTip="正在连接服务器" };
+    static System.Windows.Shapes.Path FloatGlyph(string kind) {
+        return new System.Windows.Shapes.Path {
+            Data=Geometry.Parse(kind=="cancel"?"M 5,5 L 15,15 M 15,5 L 5,15":
+                kind=="confirm"?"M 4,10 L 8,14 L 16,6":
+                "M 7,4 A 3,3 0 0 1 13,4 L 13,10 A 3,3 0 0 1 7,10 Z M 4,9 L 4,10 A 6,6 0 0 0 16,10 L 16,9 M 10,16 L 10,19 M 7,19 L 13,19"),
+            Width=20,Height=20,Stretch=Stretch.None,StrokeThickness=2,
+            Stroke=T("#33363A","#E7E8E6"),StrokeStartLineCap=PenLineCap.Round,
+            StrokeEndLineCap=PenLineCap.Round,StrokeLineJoin=PenLineJoin.Round };
     }
-    static Button WindowAction(string kind) {
-        var button=ThemeButton("","#00000000","#00000000","#63666A","#D5D7D5",8);
-        button.Width=21;button.Height=20;button.Padding=new Thickness(0);
-        button.Opacity=.76;
-        var path=new System.Windows.Shapes.Path {
-            Data=Geometry.Parse(kind=="close"?
-                "M 3,3 L 11,11 M 11,3 L 3,11":
-                kind=="expand"?"M 3,9 L 7,5 L 11,9":"M 3,5 L 7,9 L 11,5"),
-            Stroke=T("#63666A","#D5D7D5"),StrokeThickness=1.6,
-            StrokeStartLineCap=PenLineCap.Round,StrokeEndLineCap=PenLineCap.Round,
-            Width=14,Height=14,Stretch=Stretch.None };
-        button.Content=path;
-        button.MouseEnter+=(s,e)=>button.Opacity=1;
-        button.MouseLeave+=(s,e)=>button.Opacity=.76;
-        return button;
-    }
-    static Border WindowActions(Button first, Button second) {
-        var row=new StackPanel { Orientation=Orientation.Horizontal };
-        row.Children.Add(first);row.Children.Add(second);
-        return new Border { Background=T("#11000000","#22FFFFFF"),
-            BorderBrush=T("#18000000","#26FFFFFF"),
-            BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(12),
-            Child=row,VerticalAlignment=VerticalAlignment.Center };
-    }
-    static Button RecordButton(double size) {
-        var button=ThemeButton("", "#26282B","#EDEEEC","#FFFFFF","#1D1F22",size/2);
-        button.Width=size;button.Height=size;button.Padding=new Thickness(0);
-        button.ToolTip="点击开始录音";
-        var glyph=new Grid { Width=28,Height=28 };
-        glyph.Children.Add(new Ellipse { Width=size>=50?18:15,Height=size>=50?18:15,
-            Fill=T("#FFFFFF","#1D1F22"),HorizontalAlignment=HorizontalAlignment.Center,
-            VerticalAlignment=VerticalAlignment.Center });
-        glyph.Children.Add(new Border { Width=size>=50?20:12,Height=size>=50?20:12,
-            CornerRadius=new CornerRadius(3),Background=T("#FFFFFF","#1D1F22"),
-            HorizontalAlignment=HorizontalAlignment.Center,
-            VerticalAlignment=VerticalAlignment.Center,
-            Visibility=Visibility.Collapsed });
+    static Button FloatButton(string kind) {
+        bool confirm=kind=="confirm";
+        var button=ThemeButton("",confirm?"#26282B":kind=="cancel"?"#11000000":"#00000000",
+            confirm?"#EDEEEC":kind=="cancel"?"#22FFFFFF":"#00000000","#33363A","#E7E8E6",22);
+        button.Width=44;button.Height=44;button.Padding=new Thickness(0);
+        var glyph=FloatGlyph(kind);
+        if(confirm)glyph.Stroke=T("#FFFFFF","#1D1F22");
         button.Content=glyph;
+        button.ToolTip=kind=="cancel"?"取消录音":confirm?"结束录音并识别":"点击开始录音";
+        System.Windows.Automation.AutomationProperties.SetName(button,(string)button.ToolTip);
+        ToolTipService.SetShowOnDisabled(button,true);
         return button;
-    }
-    static void SetRecordButtonVisual(Button button, bool active) {
-        if(button==null)return;
-        var glyph=button.Content as Grid;
-        if(glyph==null)return;
-        glyph.Children[0].Visibility=active?Visibility.Collapsed:Visibility.Visible;
-        glyph.Children[1].Visibility=active?Visibility.Visible:Visibility.Collapsed;
-        button.Background=T("#26282B","#EDEEEC");
-        button.ToolTip=active?"点击结束录音":"点击开始录音";
     }
     static Grid WaveBars(int count) {
         var row=new StackPanel { Orientation=Orientation.Horizontal,
@@ -371,25 +344,36 @@ internal static partial class Desktop {
         }
     }
     static void AnimateWave() {
-        ReadAudioMeter();
         var now=DateTime.UtcNow;
-        AdvanceWave(recording && (now-meterReceived).TotalMilliseconds<250?audioLevel:0,
-            (now-waveFrame).TotalMilliseconds);
+        double elapsed=(now-waveFrame).TotalMilliseconds;
+        if(recording) {
+            ReadAudioMeter();
+            AdvanceWave((now-meterReceived).TotalMilliseconds<250?audioLevel:0,elapsed);
+        } else if(floatState==FloatState.Recognizing) {
+            recognitionPhase+=Math.Max(0,Math.Min(100,elapsed))*.006;
+            for(int i=0;i<waveBars.Count;i++) {
+                waveBars[i].Height=4+22*(1-i/18.0)*(.55+.45*Math.Pow(Math.Sin(recognitionPhase-i*.24),2));
+                waveBars[i].Opacity=1;
+                ((TranslateTransform)((StackPanel)waveBars[i].Tag).RenderTransform).X=0;
+            }
+        }
         waveFrame=now;
     }
     static void UpdateWaveAnimation() {
         if(waveTick==null)return;
-        bool active=recording && floatWindow!=null && floatWindow.IsVisible;
+        bool active=(floatState==FloatState.Listening || floatState==FloatState.Recognizing) && floatWindow!=null && floatWindow.IsVisible;
         if(active) {
             if(!waveTick.IsEnabled){waveFrame=DateTime.UtcNow;waveTick.Start();}
         } else {
             if(waveTick.IsEnabled)waveTick.Stop();
+        }
+        if(!active || !recording) {
             if(meterSocket!=null){meterSocket.Close();meterSocket=null;}
-            audioLevel=0;meterReceived=meterRequested=DateTime.MinValue;waveOffset=0;
+            audioLevel=0;meterReceived=meterRequested=DateTime.MinValue;
         }
         foreach(var bar in waveBars) {
             var row=bar.Tag as StackPanel;
-            if(row!=null)row.Opacity=recording?1:.3;
+            if(row!=null)row.Opacity=1;
             if(!active){bar.Height=2;((TranslateTransform)row.RenderTransform).X=0;}
         }
     }

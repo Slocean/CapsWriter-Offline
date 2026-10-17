@@ -41,12 +41,12 @@ internal static partial class Desktop {
     static Forms.NotifyIcon tray;
     static Process backend;
     static DispatcherTimer tick;
-    static TextBox host, port, seconds, contextWords, logBox, urlField, transcript, floatTranscript;
+    static TextBox host, port, seconds, contextWords, logBox, urlField, transcript;
     static PasswordBox apiKeyField;
-    static TextBlock status, floatStatus, heroHint, sideStatus, apiKeyHint, serverHint;
+    static TextBlock status, heroHint, sideStatus, apiKeyHint, serverHint;
     static UIElement lanFields, remoteFields;
     static Button lanModeButton, remoteModeButton;
-    static Ellipse sideDot, floatConnectionDot;
+    static Ellipse sideDot;
     static Button mainRecord, floatRecord, copyResult;
     static CheckBox showFloat;
     static bool connected, recording, exiting, ownsBackend, remoteMode;
@@ -336,7 +336,7 @@ internal static partial class Desktop {
         mainRecord.Width=138;mainRecord.Height=42;mainRecord.VerticalAlignment=VerticalAlignment.Center;
         mainRecord.Click+=(s,e)=>{
             bool start=!recording;
-            if(connected){ToggleRecording();if(start)main.WindowState=WindowState.Minimized;}
+            if(connected || recording){ToggleRecording();if(start)main.WindowState=WindowState.Minimized;}
         };
         Grid.SetColumn(mainRecord,1);recorder.Children.Add(mainRecord);
         body.Children.Add(Surface(recorder,20));
@@ -541,7 +541,7 @@ internal static partial class Desktop {
     }
 
     static void BuildFloat() {
-        floatWindow=new Window { Width=floatCollapsed?116:360,Height=floatCollapsed?56:108,
+        floatWindow=new Window { Width=56,Height=56,
             WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.NoResize,
             AllowsTransparency=true,Background=Brushes.Transparent,
             Topmost=floatTopmost,ShowInTaskbar=false,ShowActivated=false,
@@ -566,74 +566,24 @@ internal static partial class Desktop {
             if(!exiting){e.Cancel=true;floatWindow.Hide();showFloat.IsChecked=false;}
         };
         floatOuter=new Border { BorderBrush=T("#55FFFFFF","#44FFFFFF"),
-            BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(20),
-            Padding=new Thickness(12,8,12,8) };
+            BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(28),
+            Padding=new Thickness(5) };
         var layers=new Grid();
-
-        var expanded=new Grid();
-        expanded.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
-        expanded.RowDefinitions.Add(new RowDefinition { Height=new GridLength(44) });
-        expanded.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
-        var top=new Grid();
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        var heading=new StackPanel { Orientation=Orientation.Horizontal };
-        heading.Children.Add(AppMark(19));
-        floatConnectionDot=ConnectionDot();
-        floatConnectionDot.Margin=new Thickness(7,0,0,0);
-        heading.Children.Add(floatConnectionDot);
-        floatStatus=Text("",11,"#5C5E60","#D3D4D2",true);
-        floatStatus.Margin=new Thickness(7,0,0,0);
-        heading.Children.Add(floatStatus);top.Children.Add(heading);
-        floatCollapseButton=WindowAction("collapse");
-        floatCollapseButton.ToolTip="收起浮窗";
-        floatCollapseButton.Click+=(s,e)=>SetFloatCollapsed(true);
-        var close=WindowAction("close");
-        close.ToolTip="隐藏浮窗";
-        close.Click+=(s,e)=>{floatWindow.Hide();showFloat.IsChecked=false;};
-        var topActions=WindowActions(floatCollapseButton,close);
-        Grid.SetColumn(topActions,1);top.Children.Add(topActions);
-        expanded.Children.Add(top);floatHeading=top;
-
-        var recorder=new Grid();
-        recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        var waveform=WaveBars(56);
-        waveform.HorizontalAlignment=HorizontalAlignment.Center;
-        recorder.Children.Add(waveform);
-        floatRecord=RecordButton(36);
-        floatRecord.Margin=new Thickness(12,0,0,0);
+        floatWave=WaveBars(18);
+        floatWave.HorizontalAlignment=HorizontalAlignment.Center;
+        layers.Children.Add(floatWave);
+        floatCancel=FloatButton("cancel");
+        floatCancel.HorizontalAlignment=HorizontalAlignment.Left;
+        floatCancel.Click+=(s,e)=>CancelRecording();
+        layers.Children.Add(floatCancel);
+        floatRecord=FloatButton("confirm");
+        floatRecord.HorizontalAlignment=HorizontalAlignment.Right;
         floatRecord.Click+=(s,e)=>ToggleRecording();
-        Grid.SetColumn(floatRecord,1);recorder.Children.Add(floatRecord);
-        Grid.SetRow(recorder,1);expanded.Children.Add(recorder);
-        floatTranscript=new TextBox { IsReadOnly=true,TextWrapping=TextWrapping.Wrap,
-            MinHeight=22,MaxHeight=96,FontSize=13,Margin=new Thickness(2,4,2,2),
-            VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,
-            Background=Brushes.Transparent,Foreground=T("#33363A","#E7E8E6"),
-            BorderThickness=new Thickness(0),Padding=new Thickness(0) };
-        Grid.SetRow(floatTranscript,2);expanded.Children.Add(floatTranscript);
-        layers.Children.Add(expanded);expandedFloat=expanded;
-
-        var compact=new StackPanel { Orientation=Orientation.Horizontal,
-            HorizontalAlignment=HorizontalAlignment.Center,
-            VerticalAlignment=VerticalAlignment.Center };
-        compactRecord=RecordButton(40);
-        ToolTipService.SetShowOnDisabled(compactRecord,true);
-        compactRecord.Click+=(s,e)=>ToggleRecording();
-        compact.Children.Add(compactRecord);
-        var expandButton=WindowAction("expand");
-        expandButton.ToolTip="展开浮窗";
-        expandButton.Click+=(s,e)=>SetFloatCollapsed(false);
-        var compactClose=WindowAction("close");
-        compactClose.ToolTip="隐藏浮窗";
-        compactClose.Click+=(s,e)=>{floatWindow.Hide();showFloat.IsChecked=false;};
-        var compactActions=WindowActions(expandButton,compactClose);
-        compactActions.Margin=new Thickness(6,0,0,0);
-        compact.Children.Add(compactActions);
-        compact.Visibility=floatCollapsed?Visibility.Visible:Visibility.Collapsed;
-        expanded.Visibility=floatCollapsed?Visibility.Collapsed:Visibility.Visible;
-        layers.Children.Add(compact);compactFloat=compact;
+        layers.Children.Add(floatRecord);
+        floatStart=FloatButton("microphone");
+        floatStart.HorizontalAlignment=HorizontalAlignment.Center;
+        floatStart.Click+=(s,e)=>ToggleRecording();
+        layers.Children.Add(floatStart);
         waveTick=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(16) };
         waveTick.Tick+=(s,e)=>AnimateWave();
         floatOuter.Child=layers;
@@ -1040,6 +990,7 @@ internal static partial class Desktop {
                 System.Globalization.CultureInfo.InvariantCulture,out startedEpoch);
             else if(p=="meter=1") meterSupported=true;
         }
+        if(rec && !recording){floatCompleted=false;floatCancelled=false;}
         recording=rec;
         if(rec && startedEpoch>0)
             started=new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc).AddSeconds(startedEpoch).ToLocalTime();
@@ -1134,7 +1085,7 @@ internal static partial class Desktop {
         }
     }
     static void ToggleRecording() {
-        if(backend==null || backend.HasExited || !connected) { MessageBox.Show("客户端尚未连接服务器。"); return; }
+        if(backend==null || backend.HasExited || (!recording && !connected)) { MessageBox.Show("客户端尚未连接服务器。"); return; }
         string cmd=recording?"STOP":"START";
         string ack=QueryBackend(cmd,900);   // STOP 总有 STOPPED 回执；START 无回执
         // 真实状态快照确认（客户端回执 STATE）：停止命令在未录音时也立即
@@ -1142,6 +1093,18 @@ internal static partial class Desktop {
         var snap=QueryBackend("STATE",400);
         if(snap!=null) ApplyStateReply(snap);
         else if(cmd=="STOP" && ack=="STOPPED") recording=false;
+        ReadLog();UpdateDisplay();
+    }
+    static bool ApplyCancelReply(string reply) {
+        if(reply!="CANCELLED")return false;
+        recording=false;floatCompleted=false;floatCancelled=true;
+        return true;
+    }
+    static void CancelRecording() {
+        if(!recording || backend==null || backend.HasExited)return;
+        if(!ApplyCancelReply(QueryBackend("CANCEL",900)))
+            AppendLog("取消录音未获确认，请重试。识别文字已保留在主界面。");
+        ReadLog();UpdateDisplay();
     }
     static void ReadLog() {
         if(!File.Exists(Log)) return;
@@ -1222,29 +1185,28 @@ internal static partial class Desktop {
             if(String.IsNullOrWhiteSpace(piece))return;
             finalText=liveMode?finalText+piece:piece;
             lastText=finalText;
-            floatResultVisible=true;
+            floatCompleted=!floatCancelled;
             if(autoCopy)CopyResult(true);
             return;
         }
         if(line.Contains("WebSocket 建立成功")) { if(!historical) connected=true; }
-        if(line.Contains("WebSocket") && (line.Contains("断开")||line.Contains("关闭")||line.Contains("失败"))) { if(!historical) { connected=false; pendingTasks.Clear(); } }
-        if(line.Contains("HTTP 401")||line.Contains("令牌")||line.Contains("API Key")) { if(!historical) { connected=false; pendingTasks.Clear(); } }
+        if(line.Contains("WebSocket") && (line.Contains("断开")||line.Contains("关闭")||line.Contains("失败"))) { if(!historical) { connected=false; pendingTasks.Clear();floatCompleted=false; } }
+        if(line.Contains("HTTP 401")||line.Contains("令牌")||line.Contains("API Key")) { if(!historical) { connected=false; pendingTasks.Clear();floatCompleted=false; } }
         string taskId;
         if((taskId=TaskEventId(line,"任务生命周期: 提交 "))!=null) { if(!historical) pendingTasks.Add(taskId); }
         else if((taskId=TaskEventId(line,"任务生命周期: 完成 "))!=null) { if(!historical) pendingTasks.Remove(taskId); }
-        else if((taskId=TaskEventId(line,"任务生命周期: 发送失败 "))!=null) { if(!historical) pendingTasks.Remove(taskId); }
-        if(line.Contains("触发：开始录音")) { if(!historical) { recording=true; started=DateTime.Now; lastText=""; finalText=""; floatResultVisible=false; } }
+        else if((taskId=TaskEventId(line,"任务生命周期: 发送失败 "))!=null) { if(!historical) { pendingTasks.Remove(taskId);floatCompleted=false; } }
+        if(line.Contains("触发：开始录音")) { if(!historical) { recording=true; started=DateTime.Now; lastText=""; finalText=""; floatCompleted=false;floatCancelled=false; } }
         if(line.Contains("释放：完成录音")) { if(!historical) recording=false; }
         // 取消/错误只结束录音本身；不清 pendingTasks（旧在途任务不受影响）
-        if(line.Contains("录音任务被取消")||line.Contains("取消录音任务")) { if(!historical) recording=false; }
-        if(line.Contains("录音任务错误")) { if(!historical) recording=false; }
+        if(line.Contains("录音任务被取消")||line.Contains("取消录音任务")) { if(!historical) { recording=false;floatCompleted=false;floatCancelled=true; } }
+        if(line.Contains("录音任务错误")) { if(!historical) { recording=false;floatCompleted=false; } }
         // 客户端忽略命令的真实回声：UI 与客户端状态错位时实时校正
         if(line.Contains("忽略 STOP 命令")) { if(!historical) recording=false; }
         if(line.Contains("忽略 START 命令")) { if(!historical) { recording=true; started=DateTime.Now; } }
         int interim=line.IndexOf("实时识别片段:",StringComparison.Ordinal);
         if(interim>=0 && !historical) {
             lastText=finalText+line.Substring(interim+"实时识别片段:".Length).Trim();
-            floatResultVisible=lastText.Length>0;
         }
         int final=line.IndexOf("收到最终识别结果:",StringComparison.Ordinal);
         if(line.Contains("实时输入已暂停") || line.Contains("最终文字未输入")) AppendLog(line);
@@ -1286,29 +1248,21 @@ internal static partial class Desktop {
             stateAnimTick.Stop();
             if(mainStateDot!=null)mainStateDot.Opacity=1;
             if(sideDot!=null)sideDot.Opacity=1;
-            if(floatConnectionDot!=null)floatConnectionDot.Opacity=1;
-            if(floatRecord!=null)floatRecord.Opacity=1;
-            if(compactRecord!=null)compactRecord.Opacity=1;
         }
     }
-    // 呼吸（状态灯/浮窗指示灯）+ 旋转（录制按钮弧）相位推进；仅表达“识别中”。
+    // 主界面的状态灯与录制按钮弧仅表达“识别中”。
     static void AnimateProcessingState() {
         stateAnimPhase+=0.17;
         double breath=0.32+0.68*Math.Abs(Math.Sin(stateAnimPhase*1.1));
         if(mainStateDot!=null)mainStateDot.Opacity=breath;
         if(sideDot!=null)sideDot.Opacity=breath;
-        if(floatConnectionDot!=null)floatConnectionDot.Opacity=breath;
         if(mainSpinnerRotate!=null)mainSpinnerRotate.Angle=(stateAnimPhase*170)%360;
-        if(!recording) {
-            if(floatRecord!=null)floatRecord.Opacity=0.62+0.38*breath;
-            if(compactRecord!=null)compactRecord.Opacity=0.6+0.4*breath;
-        }
     }
     static void UpdateDisplay() {
         bool alive=backend!=null && !backend.HasExited;
         // 后端退出 / 断线：识别等待立即清空（真实终态，不用超时假清除）
         if(!alive || !connected) pendingTasks.Clear();
-        if(!alive) recording=false;
+        if(!alive){recording=false;floatCompleted=false;}
         string state=!alive?"客户端未运行":recording?"正在录音  "+(DateTime.Now-started).ToString(@"mm\:ss"):
             processing?"正在识别":connected?"准备就绪":"正在连接服务器";
         status.Text=state;
@@ -1325,19 +1279,7 @@ internal static partial class Desktop {
         sideStatus.Text=recording?"正在录音":processing?"识别中":connected?"服务已连接":"尚未连接";
         sideDot.Fill=B(dotHex);
         bool floatReady=alive&&connected;
-        var floatIndicator=B(recording?RecHex:processing?WarnHex:floatReady?OkHex:WarnHex);
-        floatConnectionDot.Fill=floatIndicator;
-        floatConnectionDot.ToolTip=recording?"正在录音":processing?"正在识别，请稍候":
-            floatReady?"已连接":"未连接服务器";
         floatOuter.BorderBrush=floatReady?T("#55FFFFFF","#44FFFFFF"):B(WarnHex);
-        floatStatus.Text=recording?(DateTime.Now-started).ToString(@"mm\:ss"):
-            processing?"识别中":"";
-        string floatText=lastText.Length>0?lastText:
-            recording?"正在聆听…":processing?"正在识别，请稍候…":ServerDisplay();
-        if(floatTranscript.Text!=floatText) {
-            floatTranscript.Text=floatText;
-            floatTranscript.ScrollToEnd();
-        }
         string displayText=lastText.Length>0?lastText:"等待录音。你说的话会出现在这里。";
         if(transcript.Text!=displayText){transcript.Text=displayText;copyResult.Content="复制";}
         copyResult.IsEnabled=!String.IsNullOrWhiteSpace(lastText);
@@ -1351,21 +1293,16 @@ internal static partial class Desktop {
             string label=recording?"■  结束录音":"●  开始录音";
             if(!(mainRecord.Content is string) || (string)mainRecord.Content!=label) mainRecord.Content=label;
         }
-        SetRecordButtonVisual(floatRecord,recording);
-        SetRecordButtonVisual(compactRecord,recording);
-        ((Ellipse)((Grid)compactRecord.Content).Children[0]).Fill=floatIndicator;
-        var floatGlyph=floatRecord.Content as Grid;
-        if(floatGlyph!=null && !recording) ((Ellipse)floatGlyph.Children[0]).Fill=floatIndicator;
-        string recTip=recording?"点击结束录音":processing?"正在识别，请稍候":
-            floatReady?"点击开始录音":"未连接服务器";
         mainRecord.ToolTip=recording?"点击结束录音":processing?"正在识别，请稍候":null;
-        compactRecord.ToolTip=recTip;
-        floatRecord.ToolTip=recTip;
+        floatStart.ToolTip=!floatReady?"未连接服务器":floatCompleted?"识别完成，点击开始录音":"点击开始录音";
+        System.Windows.Automation.AutomationProperties.SetName(floatStart,(string)floatStart.ToolTip);
         UpdateWaveAnimation();
         UpdateProcessingAnimation();
         mainRecord.Background=recording?T("#F3E3E1","#5A3A3C"):processing?T("#F3EADB","#4E4434"):T("#26282B","#EDEEEC");
         mainRecord.Foreground=recording?T("#9E4038","#F4E4E2"):processing?T("#8A6A32","#E6D5B4"):T("#FFFFFF","#1D1F22");
-        mainRecord.IsEnabled=floatRecord.IsEnabled=compactRecord.IsEnabled=alive&&connected;
+        mainRecord.IsEnabled=alive && (connected || recording);
+        floatStart.IsEnabled=alive && connected && !processing;
+        floatRecord.IsEnabled=floatCancel.IsEnabled=alive && recording;
         tray.Text=recording?"CapsWriter · 正在录音":processing?"CapsWriter · 识别中":"CapsWriter · "+(connected?"已连接":"未连接");
     }
     // 返回 false = 无法确认客户端已完成录音停止与输出恢复，

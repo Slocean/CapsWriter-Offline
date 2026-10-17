@@ -7,6 +7,7 @@ UDP 控制模块
 命令协议：
 - START: 开始录音
 - STOP: 停止录音
+- CANCEL: 取消当前录音（CANCELLED 回执在同步恢复输出静音后发出）
 - STATE: 只读状态快照（STATE|recording=<0/1>|connected=<0/1>），
   供桌面端接入已运行客户端时同步真实录音/连接状态
 - LEVEL: 只读麦克风 RMS（LEVEL|<0..1>），仅返回最近 250ms 内的录音音量
@@ -133,6 +134,13 @@ class UDPController:
             # 无论是否在录音都回执 STOPPED：录音中的路径在 finish() 同步
             # 完成输出静音恢复之后才会执行到这里，回执即证明恢复已完成。
             self._reply(addr, b'STOPPED')
+
+        elif command == 'CANCEL':
+            for task in list(self.manager.tasks.values()) + [self.manager.control_task]:
+                if task.is_recording:
+                    task.cancel()
+            logger.info("UDP 控制：取消录音任务")
+            self._reply(addr, b'CANCELLED')
 
         elif command == 'STATE':
             # 只读状态快照：桌面端接入已运行客户端时同步真实录音/连接
