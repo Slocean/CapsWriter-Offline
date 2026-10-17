@@ -67,24 +67,24 @@ internal static partial class Desktop {
 
     // ---- 界面 -----------------------------------------------------------
 
-    // 返回 Disclosure 折叠区的内容（标题由 Disclosure 头提供）
+    // 软件更新设置区的内容。
     static UIElement UpdateSection() {
         var panel = new StackPanel();
         var row = new Grid { Margin = new Thickness(0, 2, 0, 0) };
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var left = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        updateCurrent = Text("当前版本 v" + AppVersion + "（" + FlavorLabel() + "）", 12, "#5A5D62", "#C7C9C8", true);
+        updateCurrent = Text("当前版本 v" + AppVersion + "（" + FlavorLabel() + "）", 14, "#262626", "#F4F4F4", true);
         left.Children.Add(updateCurrent);
-        updateStatus = Text("通过 GitHub Releases 分发；更新前会校验 SHA256，失败自动回滚。", 11, "#7A7E83", "#A2A5A9");
+        updateStatus = Hint("发现新版本时，可查看更新内容再安装。");
         updateStatus.TextWrapping = TextWrapping.Wrap;
         updateStatus.Margin = new Thickness(0, 5, 12, 0);
         left.Children.Add(updateStatus);
         row.Children.Add(left);
-        updateButton = ThemeButton("检查更新", "#26282B", "#EDEEEC", "#FFFFFF", "#1D1F22", 9);
+        updateButton = ActionButton("检查更新");
         updateButton.Width = 96;
-        updateButton.Height = 34;
-        updateButton.FontSize = 11;
+        updateButton.Height = 40;
+        updateButton.FontSize = 13;
         updateButton.VerticalAlignment = VerticalAlignment.Center;
         updateButton.Click += (s, e) => CheckForUpdates(true);
         Grid.SetColumn(updateButton, 1);

@@ -23,6 +23,8 @@ Copy-Item -LiteralPath (Join-Path $repo 'CapsWriterDesktop.exe') -Destination $d
 New-Item -ItemType Directory -Path (Join-Path $dest 'assets') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'assets\icon.ico') -Destination (Join-Path $dest 'assets\icon.ico') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'assets\icon.png') -Destination (Join-Path $dest 'assets\icon.png') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'assets\brand-mark.png') -Destination (Join-Path $dest 'assets\brand-mark.png') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'assets\fonts') -Destination (Join-Path $dest 'assets') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\output\live_output.py') -Destination (Join-Path $dest 'core\client\output\live_output.py') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\output\result_processor.py') -Destination (Join-Path $dest 'core\client\output\result_processor.py') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'core\client\audio\recorder.py') -Destination (Join-Path $dest 'core\client\audio\recorder.py') -Force

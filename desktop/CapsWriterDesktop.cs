@@ -66,8 +66,9 @@ internal static partial class Desktop {
     static string captureSession;
     static bool processing { get { return pendingTasks.Count>0 || (captureEventsSupported && awaitingAudio && !recording); } }
     // 主窗口双 Tab（语音输入/设置）与识别等待状态灯
-    static Button voiceTabButton, settingsTabButton;
-    static UIElement voicePage, settingsPage;
+    static Button voiceTabButton, settingsTabButton, logsTabButton;
+    static TextBlock connectionEndpoint;
+    static UIElement voicePage, settingsPage, logsPage;
     static Ellipse mainStateDot;
     static System.Windows.Shapes.Path mainSpinner;
     static RotateTransform mainSpinnerRotate;
@@ -141,6 +142,8 @@ internal static partial class Desktop {
             RelativeSource=new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent) });
         border.SetBinding(Border.BorderThicknessProperty,new System.Windows.Data.Binding("BorderThickness") {
             RelativeSource=new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent) });
+        border.SetBinding(Border.PaddingProperty,new System.Windows.Data.Binding("Padding") {
+            RelativeSource=new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent) });
         var layer=new FrameworkElementFactory(typeof(Grid));
         var content=new FrameworkElementFactory(typeof(ContentPresenter));
         content.SetBinding(FrameworkElement.HorizontalAlignmentProperty,
@@ -165,7 +168,10 @@ internal static partial class Desktop {
         pressed.Setters.Add(new Setter(Border.OpacityProperty,0.13,"Shade"));
         var disabled=new Trigger { Property=UIElement.IsEnabledProperty, Value=false };
         disabled.Setters.Add(new Setter(UIElement.OpacityProperty,0.45,"Root"));
-        template.Triggers.Add(hover);template.Triggers.Add(pressed);template.Triggers.Add(disabled);
+        var focused=new Trigger { Property=UIElement.IsKeyboardFocusedProperty,Value=true };
+        focused.Setters.Add(new Setter(Border.BorderBrushProperty,AccentInk(),"Root"));
+        focused.Setters.Add(new Setter(Border.BorderThicknessProperty,new Thickness(1),"Root"));
+        template.Triggers.Add(focused);template.Triggers.Add(hover);template.Triggers.Add(pressed);template.Triggers.Add(disabled);
         return template;
     }
     static Button Btn(string value,string bg="#3F6AC4",string fg="#FFFFFF",double radius=10) {
@@ -175,12 +181,13 @@ internal static partial class Desktop {
             Template=ButtonTemplate(radius) };
     }
     static TextBox Field() {
-        return new TextBox { Height=42, FontSize=14, Foreground=T("#202226","#F0F1EF"),
-            Background=T("#FBFBFA","#232529"), BorderBrush=T("#D8DAD6","#484B50"), BorderThickness=new Thickness(1),
-            Padding=new Thickness(11,9,11,7), VerticalContentAlignment=VerticalAlignment.Center };
+        return new TextBox { Height=44, FontSize=14, Foreground=FieldInk(),
+            Background=FieldBg(), BorderBrush=FieldLine(), BorderThickness=new Thickness(1),
+            Padding=new Thickness(12,9,12,9), VerticalContentAlignment=VerticalAlignment.Center,
+            Template=InputTemplate(typeof(TextBox)),SelectionBrush=T("#D9D9D9","#666666") };
     }
     static CheckBox Switch(string title) {
-        var toggle=new CheckBox { Content=title, Foreground=T("#33363A","#E7E8E6"), FontSize=13,
+        var toggle=new CheckBox { Content=title, Foreground=FieldInk(), FontSize=13,
             VerticalAlignment=VerticalAlignment.Center, Cursor=Cursors.Hand };
         var root=new FrameworkElementFactory(typeof(StackPanel));
         root.SetValue(StackPanel.OrientationProperty,Orientation.Horizontal);
@@ -189,7 +196,7 @@ internal static partial class Desktop {
         track.SetValue(Border.WidthProperty,36.0);
         track.SetValue(Border.HeightProperty,21.0);
         track.SetValue(Border.CornerRadiusProperty,new CornerRadius(11));
-        track.SetValue(Border.BackgroundProperty,T("#C9CCD0","#575B5F"));
+        track.SetValue(Border.BackgroundProperty,T("#D9D9D9","#555555"));
         track.SetValue(Border.MarginProperty,new Thickness(0,0,10,0));
         var thumb=new FrameworkElementFactory(typeof(Ellipse));
         thumb.Name="Thumb";
@@ -197,7 +204,7 @@ internal static partial class Desktop {
         thumb.SetValue(FrameworkElement.HeightProperty,15.0);
         thumb.SetValue(FrameworkElement.MarginProperty,new Thickness(3,0,3,0));
         thumb.SetValue(FrameworkElement.HorizontalAlignmentProperty,HorizontalAlignment.Left);
-        thumb.SetValue(Shape.FillProperty,T("#FFFFFF","#161719"));
+        thumb.SetValue(Shape.FillProperty,T("#FFFFFF","#D7D7D7"));
         track.AppendChild(thumb);
         root.AppendChild(track);
         var caption=new FrameworkElementFactory(typeof(ContentPresenter));
@@ -205,221 +212,203 @@ internal static partial class Desktop {
         root.AppendChild(caption);
         var template=new ControlTemplate(typeof(CheckBox)) { VisualTree=root };
         var on=new Trigger { Property=System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, Value=true };
-        on.Setters.Add(new Setter(Border.BackgroundProperty,T("#26282B","#EDEEEC"),"Track"));
+        on.Setters.Add(new Setter(Border.BackgroundProperty,ActionFill(),"Track"));
+        on.Setters.Add(new Setter(Shape.FillProperty,ActionInk(),"Thumb"));
         on.Setters.Add(new Setter(FrameworkElement.HorizontalAlignmentProperty,HorizontalAlignment.Right,"Thumb"));
         template.Triggers.Add(on);
         toggle.Template=template;
         return toggle;
     }
     static void BuildMain() {
-        main=new Window { Title="CapsWriter · 语音输入", Width=760,Height=680,
-            MinWidth=640,MinHeight=560,WindowStartupLocation=WindowStartupLocation.CenterScreen,
-            WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.CanResize,
-            Background=T("#F6F7F5","#141517"),FontFamily=new FontFamily("Microsoft YaHei UI") };
+        main=new Window { Title="CapsWriter · 语音输入",Width=1040,Height=760,
+            MinWidth=820,MinHeight=620,WindowStartupLocation=WindowStartupLocation.CenterScreen,
+            WindowStyle=WindowStyle.None,ResizeMode=ResizeMode.CanResize,Background=PageBg(),
+            FontFamily=MainFont(),FontSize=13,
+            UseLayoutRounding=true,SnapsToDevicePixels=true };
+        TextOptions.SetTextFormattingMode(main,TextFormattingMode.Display);
         string iconPath=Path.Combine(Dir,"assets","icon.ico");
-        if(File.Exists(iconPath)) main.Icon=System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(iconPath));
+        if(File.Exists(iconPath))main.Icon=System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(iconPath));
         System.Windows.Shell.WindowChrome.SetWindowChrome(main,new System.Windows.Shell.WindowChrome {
-            CaptionHeight=64,ResizeBorderThickness=new Thickness(6),GlassFrameThickness=new Thickness(0),
+            CaptionHeight=72,ResizeBorderThickness=new Thickness(6),GlassFrameThickness=new Thickness(0),
             CornerRadius=new CornerRadius(0),UseAeroCaptionButtons=false });
         main.Closing+=(s,e)=>{if(!exiting){e.Cancel=true;main.Hide();}};
-        var root=new Grid { Background=T("#F6F7F5","#141517") };
-        root.RowDefinitions.Add(new RowDefinition { Height=new GridLength(64) });
-        root.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
+        var root=new Grid { Background=PageBg() };
+        root.RowDefinitions.Add(new RowDefinition { Height=new GridLength(72) });
         root.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
+        root.RowDefinitions.Add(new RowDefinition { Height=new GridLength(44) });
 
-        var top=new Border { Background=T("#FFFFFF","#1D1F22"),
-            BorderBrush=T("#E6E7E4","#35383C"),BorderThickness=new Thickness(0,0,0,1) };
-        var topGrid=new Grid { Margin=new Thickness(22,0,14,0) };
-        topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        var header=new Grid { Margin=new Thickness(28,0,20,0) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         var brand=new StackPanel { Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center };
-        brand.Children.Add(AppMark(32));
-        var brandText=Text("CapsWriter",15,"#1D1F22","#F1F2F0",true);
-        brandText.Margin=new Thickness(11,0,0,0);brand.Children.Add(brandText);
-        topGrid.Children.Add(brand);
-        var badge=new Border { Background=T("#F0F1EE","#2C2F32"),
-            CornerRadius=new CornerRadius(12),Padding=new Thickness(10,5,11,5),
-            VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,11,0) };
-        var badgeRow=new StackPanel { Orientation=Orientation.Horizontal };
-        sideDot=new Ellipse { Width=7,Height=7,Fill=B("#A9ACAF"),
-            VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,6,0) };
-        badgeRow.Children.Add(sideDot);
-        sideStatus=Text("连接中",11,"#5A5D62","#C7C9C8",true);badgeRow.Children.Add(sideStatus);
-        badge.Child=badgeRow;Grid.SetColumn(badge,1);topGrid.Children.Add(badge);
-        themeButton=ThemeButton("", "#F0F1EE","#2C2F32","#3A3D41","#E8E9E7",8);
-        themeButton.Width=84;themeButton.Height=32;themeButton.FontSize=11;
-        themeButton.Margin=new Thickness(0,0,8,0);
+        brand.Children.Add(BrandMark());
+        var name=Text("CapsWriter",18,"#262626","#F4F4F4",true);
+        name.Margin=new Thickness(9,0,0,0);
+        brand.Children.Add(name);header.Children.Add(brand);
+        var navigation=new StackPanel { Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center };
+        voiceTabButton=NavigationButton("语音输入");voiceTabButton.Click+=(s,e)=>SelectMainTab(0);
+        logsTabButton=NavigationButton("运行记录");logsTabButton.Click+=(s,e)=>SelectMainTab(2);
+        settingsTabButton=NavigationButton("设置");settingsTabButton.Click+=(s,e)=>SelectMainTab(1);
+        navigation.Children.Add(voiceTabButton);navigation.Children.Add(logsTabButton);navigation.Children.Add(settingsTabButton);
+        Grid.SetColumn(navigation,1);header.Children.Add(navigation);
+        var actions=new StackPanel { Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,
+            VerticalAlignment=VerticalAlignment.Center };
+        themeButton=ActionButton("");themeButton.Width=84;themeButton.Height=34;themeButton.Padding=new Thickness(10,0,10,0);
+        themeButton.Margin=new Thickness(0,0,12,0);themeButton.Background=Brushes.Transparent;
         themeButton.Click+=(s,e)=>{darkTheme=!darkTheme;ApplyTheme();SaveUiPrefs();};
-        System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(themeButton,true);
-        Grid.SetColumn(themeButton,2);topGrid.Children.Add(themeButton);
-        ApplyTheme();
-        var windowButtons=new StackPanel { Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center };
-        var minimize=ThemeButton("−","#FFFFFF","#1D1F22","#63666A","#C9CBC9",8);
-        minimize.Width=34;minimize.Height=32;minimize.FontSize=18;
-        minimize.Click+=(s,e)=>main.WindowState=WindowState.Minimized;
-        System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(minimize,true);
-        windowButtons.Children.Add(minimize);
-        var close=ThemeButton("×","#FFFFFF","#1D1F22","#63666A","#C9CBC9",8);
-        close.Width=34;close.Height=32;close.FontSize=18;
-        close.Click+=(s,e)=>main.Hide();
-        System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(close,true);
-        windowButtons.Children.Add(close);
-        Grid.SetColumn(windowButtons,3);topGrid.Children.Add(windowButtons);
-        top.Child=topGrid;
+        System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(themeButton,true);actions.Children.Add(themeButton);
+        var minimize=ChromeButton("minimize","最小化");minimize.Click+=(s,e)=>main.WindowState=WindowState.Minimized;
+        var maximize=ChromeButton("maximize","最大化或还原");maximize.Click+=(s,e)=>main.WindowState=
+            main.WindowState==WindowState.Maximized?WindowState.Normal:WindowState.Maximized;
+        main.StateChanged+=(s,e)=>maximize.Content=MainIcon(main.WindowState==WindowState.Maximized?"restore":"maximize");
+        var close=ChromeButton("close","隐藏到托盘");close.Click+=(s,e)=>main.Hide();
+        actions.Children.Add(minimize);actions.Children.Add(maximize);actions.Children.Add(close);
+        Grid.SetColumn(actions,2);header.Children.Add(actions);
+        var top=new Border { BorderBrush=CardLine(),BorderThickness=new Thickness(0,0,0,1),Child=header };
         root.Children.Add(top);
 
-        // ===== 顶部 Tab 条：语音输入 / 设置 =====
-        var tabBar=new StackPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(24,14,24,0) };
-        voiceTabButton=ThemeButton("语音输入","#26282B","#EDEEEC","#FFFFFF","#1D1F22",9);
-        voiceTabButton.Width=112;voiceTabButton.Height=38;
-        voiceTabButton.Click+=(s,e)=>SelectMainTab(0);
-        tabBar.Children.Add(voiceTabButton);
-        settingsTabButton=ThemeButton("设置","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",9);
-        settingsTabButton.Width=112;settingsTabButton.Height=38;settingsTabButton.Margin=new Thickness(8,0,0,0);
-        settingsTabButton.Click+=(s,e)=>SelectMainTab(1);
-        tabBar.Children.Add(settingsTabButton);
-        Grid.SetRow(tabBar,1);root.Children.Add(tabBar);
-
-        voicePage=BuildVoicePage();
-        settingsPage=BuildSettingsPage();
-        var pages=new Grid();
-        pages.Children.Add(voicePage);
-        pages.Children.Add(settingsPage);
-        settingsPage.Visibility=Visibility.Collapsed;
-        Grid.SetRow(pages,2);root.Children.Add(pages);
-        // 识别等待动画时钟：60ms 推进呼吸/旋转相位；启停由 UpdateDisplay 按真实状态切换
+        voicePage=BuildVoicePage();logsPage=BuildLogPage();settingsPage=BuildSettingsPage();
+        var pages=new Grid();pages.Children.Add(voicePage);pages.Children.Add(logsPage);pages.Children.Add(settingsPage);
+        Grid.SetRow(pages,1);root.Children.Add(pages);
+        var footer=new Grid { Margin=new Thickness(32,0,32,0) };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        var connection=new Grid { VerticalAlignment=VerticalAlignment.Center };
+        connection.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        connection.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        var connectionState=new StackPanel { Orientation=Orientation.Horizontal };
+        sideDot=new Ellipse { Width=6,Height=6,Fill=MutedInk(),VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,7,0) };
+        sideStatus=Text("尚未连接",11,"#737373","#B3B3B3");
+        connectionState.Children.Add(sideDot);connectionState.Children.Add(sideStatus);connection.Children.Add(connectionState);
+        connectionEndpoint=Text("",11,"#737373","#B3B3B3");connectionEndpoint.Margin=new Thickness(16,0,20,0);
+        connectionEndpoint.TextTrimming=TextTrimming.CharacterEllipsis;Grid.SetColumn(connectionEndpoint,1);connection.Children.Add(connectionEndpoint);
+        footer.Children.Add(connection);
+        var version=Text("v"+AppVersion,11,"#737373","#B3B3B3");Grid.SetColumn(version,1);footer.Children.Add(version);
+        Grid.SetRow(footer,2);root.Children.Add(footer);
+        SelectMainTab(0);ApplyTheme();
         stateAnimTick=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(60) };
-        stateAnimTick.Tick+=(s,e)=>AnimateProcessingState();
-        main.Content=root;
+        stateAnimTick.Tick+=(s,e)=>AnimateProcessingState();main.Content=root;
     }
 
-    // 双 Tab 切换：语音输入页常驻录音/识别文字/运行记录；设置页集中服务器、
-    // 软件更新、浮窗设置、识别与快捷键设置（后三者默认折叠）。
     static void SelectMainTab(int index) {
-        if(voicePage!=null) voicePage.Visibility=index==0?Visibility.Visible:Visibility.Collapsed;
-        if(settingsPage!=null) settingsPage.Visibility=index==1?Visibility.Visible:Visibility.Collapsed;
-        if(voiceTabButton!=null) {
-            voiceTabButton.Background=index==0?T("#26282B","#EDEEEC"):T("#F0F1EE","#2E3134");
-            voiceTabButton.Foreground=index==0?T("#FFFFFF","#1D1F22"):T("#5A5D62","#C7C9C8");
-        }
-        if(settingsTabButton!=null) {
-            settingsTabButton.Background=index==1?T("#26282B","#EDEEEC"):T("#F0F1EE","#2E3134");
-            settingsTabButton.Foreground=index==1?T("#FFFFFF","#1D1F22"):T("#5A5D62","#C7C9C8");
+        voicePage.Visibility=index==0?Visibility.Visible:Visibility.Collapsed;
+        settingsPage.Visibility=index==1?Visibility.Visible:Visibility.Collapsed;
+        logsPage.Visibility=index==2?Visibility.Visible:Visibility.Collapsed;
+        var buttons=new[]{voiceTabButton,settingsTabButton,logsTabButton};
+        for(int i=0;i<buttons.Length;i++) {
+            bool active=i==index;
+            buttons[i].Foreground=active?FieldInk():MutedInk();buttons[i].Background=Brushes.Transparent;
+            buttons[i].FontWeight=active?FontWeights.Medium:FontWeights.Normal;
+            buttons[i].BorderBrush=active?FieldInk():Brushes.Transparent;
+            buttons[i].BorderThickness=new Thickness(0,0,0,2);
+            System.Windows.Automation.AutomationProperties.SetItemStatus(buttons[i],active?"当前页面":"");
         }
     }
 
     static ScrollViewer PageScroll(StackPanel body) {
         var scroll=new ScrollViewer { VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled };
-        scroll.Resources[typeof(ScrollBar)]=SlimScrollBar();
-        scroll.Content=body;
-        return scroll;
+            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,Content=body };
+        scroll.Resources[typeof(ScrollBar)]=SlimScrollBar();return scroll;
     }
 
     static UIElement BuildVoicePage() {
-        var body=new StackPanel { Margin=new Thickness(24,16,24,20) };
-        body.Children.Add(Text("语音输入",23,"#1D1F22","#F1F2F0",true));
-        var intro=Text("按住 CapsLock，或点击浮窗录音。文字会输入当前应用。",12,"#7A7E83","#A2A5A9");
-        intro.Margin=new Thickness(0,4,0,17);body.Children.Add(intro);
+        var body=new Grid { Margin=new Thickness(56,30,56,24),MaxWidth=980 };
+        body.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
+        body.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
+        body.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
+        var heading=new Grid();
+        heading.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        heading.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+        heading.Children.Add(PageHeading("语音输入","在任意应用里说话，文字会自动输入。"));
+        liveModeButton=ActionButton("边说边写");liveModeButton.Width=104;liveModeButton.Height=36;
+        liveModeButton.Click+=(s,e)=>SelectMode(true);
+        batchModeButton=ActionButton("录完再写");batchModeButton.Width=104;batchModeButton.Height=36;
+        batchModeButton.Click+=(s,e)=>SelectMode(false);
+        var modes=new StackPanel { Orientation=Orientation.Horizontal };
+        modes.Children.Add(liveModeButton);modes.Children.Add(batchModeButton);
+        var modeControl=new Border { Background=ChipBg(),CornerRadius=new CornerRadius(10),Padding=new Thickness(4),Child=modes,
+            VerticalAlignment=VerticalAlignment.Top,Margin=new Thickness(20,5,0,0) };
+        Grid.SetColumn(modeControl,1);heading.Children.Add(modeControl);
+        modeHint=Hint("");modeHint.TextWrapping=TextWrapping.Wrap;modeHint.Margin=new Thickness(0,16,0,0);
+        var introduction=new StackPanel();introduction.Children.Add(heading);introduction.Children.Add(modeHint);
+        body.Children.Add(introduction);UpdateModeButtons();
 
-        var recorder=new Grid();
+        var recorder=new Grid { Margin=new Thickness(0,28,0,28) };
         recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         recorder.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        var recorderText=new StackPanel { VerticalAlignment=VerticalAlignment.Center };
-        var statusRow=new StackPanel { Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center };
-        mainStateDot=new Ellipse { Width=10,Height=10,Fill=B(IdleHex),VerticalAlignment=VerticalAlignment.Center,
-            ToolTip="未连接" };
-        statusRow.Children.Add(mainStateDot);
-        status=Text("准备开始",19,"#1D1F22","#F1F2F0",true);status.Margin=new Thickness(10,0,0,0);
-        statusRow.Children.Add(status);
-        recorderText.Children.Add(statusRow);
-        heroHint=Text("正在连接服务器…",11,"#7A7E83","#A2A5A9");
-        heroHint.Margin=new Thickness(0,6,15,0);heroHint.TextWrapping=TextWrapping.Wrap;
-        recorderText.Children.Add(heroHint);recorder.Children.Add(recorderText);
-        mainRecord=ThemeButton("●  开始录音","#26282B","#EDEEEC","#FFFFFF","#1D1F22",10);
-        mainRecord.Width=138;mainRecord.Height=42;mainRecord.VerticalAlignment=VerticalAlignment.Center;
+        var stateText=new StackPanel { VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,20,0) };
+        var statusRow=new StackPanel { Orientation=Orientation.Horizontal };
+        mainStateDot=new Ellipse { Width=7,Height=7,Fill=MutedInk(),VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,9,0) };
+        status=Text("准备开始",16,"#262626","#F4F4F4",true);
+        statusRow.Children.Add(mainStateDot);statusRow.Children.Add(status);stateText.Children.Add(statusRow);
+        heroHint=Hint("连接服务器后即可开始录音。");heroHint.Margin=new Thickness(0,8,0,0);heroHint.TextWrapping=TextWrapping.Wrap;
+        stateText.Children.Add(heroHint);recorder.Children.Add(stateText);
+        mainRecord=ActionButton("开始录音",true);mainRecord.Width=156;mainRecord.Height=48;
+        mainRecord.Template=ButtonTemplate(24);mainRecord.VerticalAlignment=VerticalAlignment.Center;
         mainRecord.Click+=(s,e)=>{
             bool start=!recording;
             if(connected || recording){ToggleRecording();if(start)main.WindowState=WindowState.Minimized;}
         };
         Grid.SetColumn(mainRecord,1);recorder.Children.Add(mainRecord);
-        body.Children.Add(Surface(recorder,20));
+        Grid.SetRow(recorder,1);body.Children.Add(recorder);
 
-        var modePanel=new StackPanel();
-        modePanel.Children.Add(Text("输入方式",13,"#33363A","#E7E8E6",true));
-        var modeRow=new StackPanel { Orientation=Orientation.Horizontal,
-            Margin=new Thickness(0,10,0,0) };
-        liveModeButton=ThemeButton("边说边写","#26282B","#EDEEEC","#FFFFFF","#1D1F22",9);
-        liveModeButton.Width=116;liveModeButton.Height=36;
-        liveModeButton.Click+=(s,e)=>SelectMode(true);
-        modeRow.Children.Add(liveModeButton);
-        batchModeButton=ThemeButton("录完再写","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",9);
-        batchModeButton.Width=116;batchModeButton.Height=36;
-        batchModeButton.Margin=new Thickness(8,0,0,0);
-        batchModeButton.Click+=(s,e)=>SelectMode(false);
-        modeRow.Children.Add(batchModeButton);
-        modePanel.Children.Add(modeRow);
-        modeHint=Text("",11,"#7A7E83","#A2A5A9");
-        modeHint.Margin=new Thickness(0,8,0,0);
-        modePanel.Children.Add(modeHint);
-        UpdateModeButtons();
-        body.Children.Add(Surface(modePanel,19));
-
-        var result=new StackPanel();
+        var result=new Grid();
+        result.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
+        result.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
         var resultHeader=new DockPanel();
-        copyResult=ThemeButton("复制","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",7);
-        copyResult.Width=64;copyResult.Height=28;
+        copyResult=ActionButton("复制");copyResult.Width=64;copyResult.Height=32;copyResult.Background=Brushes.Transparent;
         copyResult.ToolTip="复制全部识别文字";copyResult.IsEnabled=false;
+        System.Windows.Automation.AutomationProperties.SetName(copyResult,"复制全部识别文字");
         copyResult.Click+=(s,e)=>CopyResult(false);
         DockPanel.SetDock(copyResult,Dock.Right);resultHeader.Children.Add(copyResult);
-        resultHeader.Children.Add(Text("识别文字",13,"#33363A","#E7E8E6",true));
-        result.Children.Add(resultHeader);
-        transcript=new TextBox { Text="等待录音。你说的话会出现在这里。",IsReadOnly=true,
-            TextWrapping=TextWrapping.Wrap,MaxHeight=120,MinHeight=40,
-            VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,
-            Background=Brushes.Transparent,Foreground=T("#5A5D62","#B9BBBD"),
-            BorderThickness=new Thickness(0),Padding=new Thickness(0),FontSize=14 };
-        transcript.Margin=new Thickness(0,10,0,2);result.Children.Add(transcript);
-        body.Children.Add(Surface(result,19));
-
-        // 运行记录：主界面常驻展开（非 Disclosure），可读区域 + 滚动
-        var logPanel=new StackPanel();
-        logPanel.Children.Add(SectionTitle("运行记录"));
-        var logHint=Hint("客户端识别进度、空结果与错误实时显示在这里。");
-        logHint.Margin=new Thickness(0,5,0,10);logHint.TextWrapping=TextWrapping.Wrap;
-        logPanel.Children.Add(logHint);
-        logBox=new TextBox { Height=176,Margin=new Thickness(0,0,0,0),IsReadOnly=true,
+        resultHeader.Children.Add(SectionTitle("识别文字"));result.Children.Add(resultHeader);
+        transcript=new TextBox { Text="点击开始录音，识别文字会显示在这里。",IsReadOnly=true,
             TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,
-            Background=T("#F5F6F4","#232529"),Foreground=T("#5C5F63","#C0C2C4"),
-            BorderThickness=new Thickness(0),Padding=new Thickness(9),
-            FontFamily=new FontFamily("Consolas"),FontSize=11 };
-        logPanel.Children.Add(logBox);
-        body.Children.Add(Surface(logPanel,19));
-        return PageScroll(body);
+            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,Background=Brushes.Transparent,Foreground=MutedInk(),
+            BorderThickness=new Thickness(0),Padding=new Thickness(0,18,0,0),FontSize=19,MinHeight=120,
+            SelectionBrush=T("#D9D9D9","#666666"),SelectionOpacity=.65 };
+        TextBlock.SetLineHeight(transcript,33);
+        System.Windows.Automation.AutomationProperties.SetName(transcript,"识别文字");
+        transcript.Resources[typeof(ScrollBar)]=SlimScrollBar();Grid.SetRow(transcript,1);result.Children.Add(transcript);
+        var content=new Border { BorderBrush=CardLine(),BorderThickness=new Thickness(0,1,0,0),Padding=new Thickness(0,18,0,0),Child=result };
+        Grid.SetRow(content,2);body.Children.Add(content);return body;
+    }
+
+    static UIElement BuildLogPage() {
+        var body=new Grid { Margin=new Thickness(56,30,56,24),MaxWidth=980 };
+        body.RowDefinitions.Add(new RowDefinition { Height=GridLength.Auto });
+        body.RowDefinitions.Add(new RowDefinition { Height=new GridLength(1,GridUnitType.Star) });
+        body.Children.Add(PageHeading("运行记录","录音、识别进度与连接状态。"));
+        logBox=new TextBox { IsReadOnly=true,TextWrapping=TextWrapping.Wrap,
+            VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,
+            Background=Brushes.Transparent,Foreground=MutedInk(),BorderThickness=new Thickness(0),Padding=new Thickness(0),
+            FontFamily=main.FontFamily,FontSize=13,
+            SelectionBrush=T("#D9D9D9","#666666") };
+        System.Windows.Automation.AutomationProperties.SetName(logBox,"运行记录");
+        logBox.Resources[typeof(ScrollBar)]=SlimScrollBar();
+        var content=new Border { BorderBrush=CardLine(),BorderThickness=new Thickness(0,1,0,0),
+            Padding=new Thickness(0,20,0,0),Margin=new Thickness(0,28,0,0),Child=logBox };
+        Grid.SetRow(content,1);body.Children.Add(content);return body;
     }
 
     static UIElement BuildSettingsPage() {
-        var body=new StackPanel { Margin=new Thickness(24,16,24,20) };
-        body.Children.Add(Text("设置",23,"#1D1F22","#F1F2F0",true));
-        var intro=Text("服务器、更新、浮窗与识别快捷键集中在这里；分组默认折叠。",12,"#7A7E83","#A2A5A9");
-        intro.Margin=new Thickness(0,4,0,17);intro.TextWrapping=TextWrapping.Wrap;body.Children.Add(intro);
+        var body=new StackPanel { Margin=new Thickness(56,30,56,24),MaxWidth=980 };
+        var heading=PageHeading("设置","调整连接、文字输出与桌面体验。");
+        heading.Margin=new Thickness(0,0,0,32);body.Children.Add(heading);
 
         var server=new StackPanel();
         var serverHeading=new Grid();
         serverHeading.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         serverHeading.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        serverHeading.Children.Add(Text("服务器",13,"#33363A","#E7E8E6",true));
+        serverHeading.Children.Add(SectionTitle("连接方式"));
         var serverActions=new StackPanel { Orientation=Orientation.Horizontal };
-        var restart=ThemeButton("重新连接","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",8);
-        restart.Width=88;restart.Height=30;restart.FontSize=11;
+        var restart=ActionButton("重新连接");
+        restart.Width=88;restart.Height=36;restart.FontSize=12;
         restart.Click+=(s,e)=>{ if(RestartBackend()) status.Text="正在重新连接"; else status.Text="已取消重启：客户端恢复未确认"; };
         serverActions.Children.Add(restart);
-        var test=ThemeButton("测试连接","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",8);
-        test.Width=88;test.Height=30;test.FontSize=11;test.Margin=new Thickness(8,0,0,0);
+        var test=ActionButton("测试连接");
+        test.Width=88;test.Height=36;test.FontSize=12;test.Margin=new Thickness(8,0,0,0);
         test.Click+=(s,e)=>{
             if(!SaveSettings(false))return;
             if(RestartBackend()) status.Text="正在测试连接";
@@ -429,16 +418,17 @@ internal static partial class Desktop {
         Grid.SetColumn(serverActions,1);serverHeading.Children.Add(serverActions);
         server.Children.Add(serverHeading);
 
-        var serverModeRow=new StackPanel { Orientation=Orientation.Horizontal,Margin=new Thickness(0,12,0,0) };
-        lanModeButton=ThemeButton("局域网","#26282B","#EDEEEC","#FFFFFF","#1D1F22",9);
+        var serverModeRow=new StackPanel { Orientation=Orientation.Horizontal };
+        lanModeButton=ActionButton("局域网",true);
         lanModeButton.Width=92;lanModeButton.Height=34;
         lanModeButton.Click+=(s,e)=>SelectServerMode(false);
         serverModeRow.Children.Add(lanModeButton);
-        remoteModeButton=ThemeButton("远程 wss","#F0F1EE","#2E3134","#5A5D62","#C7C9C8",9);
-        remoteModeButton.Width=92;remoteModeButton.Height=34;remoteModeButton.Margin=new Thickness(8,0,0,0);
+        remoteModeButton=ActionButton("远程连接");
+        remoteModeButton.Width=92;remoteModeButton.Height=34;remoteModeButton.Margin=new Thickness(0);
         remoteModeButton.Click+=(s,e)=>SelectServerMode(true);
         serverModeRow.Children.Add(remoteModeButton);
-        server.Children.Add(serverModeRow);
+        server.Children.Add(new Border { Background=ChipBg(),CornerRadius=new CornerRadius(10),Padding=new Thickness(4),
+            Child=serverModeRow,HorizontalAlignment=HorizontalAlignment.Left,Margin=new Thickness(0,14,0,0) });
 
         var lanPanel=new StackPanel();
         var fields=new Grid { Margin=new Thickness(0,12,0,0) };
@@ -446,15 +436,15 @@ internal static partial class Desktop {
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         fields.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
         var addrCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
-        addrCol.Children.Add(Text("地址",11,"#7A7E83","#A2A5A9"));
+        addrCol.Children.Add(FieldLabel("服务器地址"));
         host=Field();host.Margin=new Thickness(0,5,0,0);addrCol.Children.Add(host);
         fields.Children.Add(addrCol);
         var portCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
-        portCol.Children.Add(Text("端口",11,"#7A7E83","#A2A5A9"));
+        portCol.Children.Add(FieldLabel("端口"));
         port=Field();port.Margin=new Thickness(0,5,0,0);portCol.Children.Add(port);
         Grid.SetColumn(portCol,1);fields.Children.Add(portCol);
-        var save=ThemeButton("保存","#26282B","#EDEEEC","#FFFFFF","#1D1F22",9);
-        save.Width=76;save.Height=42;save.VerticalAlignment=VerticalAlignment.Bottom;
+        var save=ActionButton("保存连接",true);
+        save.Width=96;save.Height=44;save.VerticalAlignment=VerticalAlignment.Bottom;
         save.Click+=(s,e)=>SaveSettings(true);
         Grid.SetColumn(save,2);fields.Children.Add(save);
         lanPanel.Children.Add(fields);
@@ -467,36 +457,35 @@ internal static partial class Desktop {
         remoteGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         remoteGrid.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
         var urlCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
-        urlCol.Children.Add(Text("远程地址",11,"#7A7E83","#A2A5A9"));
+        urlCol.Children.Add(FieldLabel("远程地址"));
         urlField=Field();urlField.Margin=new Thickness(0,5,0,0);
         urlField.ToolTip="完整的 wss:// 服务地址，例如 wss://voice.example.com";
         urlCol.Children.Add(urlField);
         remoteGrid.Children.Add(urlCol);
         var keyCol=new StackPanel { Margin=new Thickness(0,0,12,0) };
-        keyCol.Children.Add(Text("部署面板 API Key",11,"#7A7E83","#A2A5A9"));
-        apiKeyField=new PasswordBox { Height=42,FontSize=14,Foreground=T("#202226","#F0F1EF"),
-            Background=T("#FBFBFA","#232529"),BorderBrush=T("#D8DAD6","#484B50"),BorderThickness=new Thickness(1),
-            Padding=new Thickness(11,9,11,7),VerticalContentAlignment=VerticalAlignment.Center };
+        keyCol.Children.Add(FieldLabel("API Key"));
+        apiKeyField=new PasswordBox { Height=44,FontSize=14,Foreground=FieldInk(),
+            Background=FieldBg(),BorderBrush=FieldLine(),BorderThickness=new Thickness(1),
+            Padding=new Thickness(12,9,12,9),VerticalContentAlignment=VerticalAlignment.Center,Template=InputTemplate(typeof(PasswordBox)) };
         apiKeyField.Margin=new Thickness(0,5,0,0);
         keyCol.Children.Add(apiKeyField);
         Grid.SetColumn(keyCol,1);remoteGrid.Children.Add(keyCol);
-        var saveRemote=ThemeButton("保存","#26282B","#EDEEEC","#FFFFFF","#1D1F22",9);
-        saveRemote.Width=76;saveRemote.Height=42;saveRemote.VerticalAlignment=VerticalAlignment.Bottom;
+        var saveRemote=ActionButton("保存连接",true);
+        saveRemote.Width=96;saveRemote.Height=44;saveRemote.VerticalAlignment=VerticalAlignment.Bottom;
         saveRemote.Click+=(s,e)=>SaveSettings(true);
         Grid.SetColumn(saveRemote,2);remoteGrid.Children.Add(saveRemote);
         remotePanel.Children.Add(remoteGrid);
-        apiKeyHint=Text("Key 以当前 Windows 用户加密保存，不会写入配置或日志；便携包复制到新电脑需重新录入。",11,"#7A7E83","#A2A5A9");
+        apiKeyHint=Text("Key 以当前 Windows 用户加密保存，不会写入配置或日志；便携包复制到新电脑需重新录入。",13,"#737373","#B3B3B3");
         apiKeyHint.TextWrapping=TextWrapping.Wrap;apiKeyHint.Margin=new Thickness(0,8,0,0);
         remotePanel.Children.Add(apiKeyHint);
         remoteFields=remotePanel;
         remoteFields.Visibility=Visibility.Collapsed;
         server.Children.Add(remoteFields);
 
-        serverHint=Text("",11,"#7A7E83","#A2A5A9");
+        serverHint=Text("",13,"#737373","#B3B3B3");
         serverHint.TextWrapping=TextWrapping.Wrap;serverHint.Margin=new Thickness(0,8,0,0);
         server.Children.Add(serverHint);
-        body.Children.Add(Surface(server,19));
-        body.Children.Add(Disclosure("软件更新",UpdateSection()));
+        body.Children.Add(SettingsSection("连接服务","选择并保存用于语音识别的服务器。",server));
 
         var appearance=new StackPanel();
         showFloat=Switch("显示浮窗");showFloat.Margin=new Thickness(0,2,0,0);
@@ -509,35 +498,37 @@ internal static partial class Desktop {
         pin.Unchecked+=(s,e)=>{floatTopmost=false;ApplyFloatTopmost();SaveUiPrefs();};
         appearance.Children.Add(pin);
         var glassRow=new Grid { Margin=new Thickness(0,13,0,0) };
-        glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(90) });
+        glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(140) });
         glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         glassRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(42) });
-        glassRow.Children.Add(Text("背景浓度",11,"#7A7E83","#A2A5A9"));
+        glassRow.Children.Add(Text("背景浓度",13,"#737373","#B3B3B3"));
         glassSlider=new Slider { Minimum=0,Maximum=100,Value=glassStrength,
             VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,12,0),
-            TickFrequency=5,IsSnapToTickEnabled=true };
+            TickFrequency=5,SmallChange=5,LargeChange=10,IsSnapToTickEnabled=true,
+            Template=ThinSliderTemplate(),Foreground=FieldInk(),Background=FieldLine() };
         glassSlider.ValueChanged+=(s,e)=>{glassStrength=glassSlider.Value;ApplyGlass();SaveUiPrefs();};
         Grid.SetColumn(glassSlider,1);glassRow.Children.Add(glassSlider);
-        glassValue=Text("",11,"#5A5D62","#C7C9C8");
+        glassValue=Text("",13,"#666666","#C2C2C2");
         Grid.SetColumn(glassValue,2);glassRow.Children.Add(glassValue);
         appearance.Children.Add(glassRow);
         var completionRow=new Grid { Margin=new Thickness(0,13,0,0) };
         completionRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(140) });
         completionRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
         completionRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(48) });
-        completionRow.Children.Add(Text("完成提示停留（秒）",11,"#7A7E83","#A2A5A9"));
+        completionRow.Children.Add(Text("完成提示停留（秒）",13,"#737373","#B3B3B3"));
         completionSlider=new Slider { Minimum=.5,Maximum=10,Value=floatCompletionSeconds,
             VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,12,0),
-            TickFrequency=.5,IsSnapToTickEnabled=true };
+            TickFrequency=.5,SmallChange=.5,LargeChange=1,IsSnapToTickEnabled=true,
+            Template=ThinSliderTemplate(),Foreground=FieldInk(),Background=FieldLine() };
         System.Windows.Automation.AutomationProperties.SetName(completionSlider,"完成提示停留秒数");
         completionSlider.ValueChanged+=(s,e)=>{
             floatCompletionSeconds=completionSlider.Value;UpdateCompletionSetting();SaveUiPrefs();
         };
         Grid.SetColumn(completionSlider,1);completionRow.Children.Add(completionSlider);
-        completionValue=Text("",11,"#5A5D62","#C7C9C8");
+        completionValue=Text("",13,"#666666","#C2C2C2");
         Grid.SetColumn(completionValue,2);completionRow.Children.Add(completionValue);
         UpdateCompletionSetting();appearance.Children.Add(completionRow);
-        body.Children.Add(Disclosure("浮窗设置",appearance));
+        body.Children.Add(SettingsSection("浮窗设置","在桌面上快速录音，自定义显示方式和完成提示。",appearance));
 
         var advancedPanel=new StackPanel { Margin=new Thickness(0,2,0,2) };
         var copy=Switch("识别完成后自动复制到剪贴板");
@@ -546,19 +537,23 @@ internal static partial class Desktop {
         copy.Unchecked+=(s,e)=>{autoCopy=false;SaveUiPrefs();};
         advancedPanel.Children.Add(copy);
         var secondsCol=new StackPanel { Width=145 };
-        secondsCol.Children.Add(Text("停顿判定（秒）",11,"#7A7E83","#A2A5A9"));
+        secondsCol.Children.Add(FieldLabel("停顿判定（秒）"));
         seconds=Field();seconds.Margin=new Thickness(0,5,0,0);secondsCol.Children.Add(seconds);
         pauseSetting=secondsCol;advancedPanel.Children.Add(secondsCol);
-        advancedPanel.Children.Add(ShortcutSettingsPanel());
         var contextCol=new StackPanel { Margin=new Thickness(0,12,0,0) };
-        contextCol.Children.Add(Text("识别提示词（可选）",11,"#7A7E83","#A2A5A9"));
+        contextCol.Children.Add(FieldLabel("识别提示词（可选）"));
         contextWords=Field();contextWords.Margin=new Thickness(0,5,0,0);
         contextWords.ToolTip="例如人名、产品名和专业术语。它会提示识别模型，但不会强制替换结果。";
         contextCol.Children.Add(contextWords);
-        var contextHelp=Text("给模型提供易听错的词语线索，不会强制改写识别结果。",11,"#7A7E83","#A2A5A9");
+        var contextHelp=Text("给模型提供易听错的词语线索，不会强制改写识别结果。",13,"#737373","#B3B3B3");
         contextHelp.Margin=new Thickness(0,6,0,0);contextCol.Children.Add(contextHelp);
         advancedPanel.Children.Add(contextCol);
-        body.Children.Add(Disclosure("识别与快捷键设置",advancedPanel));
+        var saveRecognition=ActionButton("保存识别设置");
+        saveRecognition.HorizontalAlignment=HorizontalAlignment.Left;saveRecognition.Margin=new Thickness(0,18,0,0);
+        saveRecognition.Click+=(s,e)=>SaveSettings(true);advancedPanel.Children.Add(saveRecognition);
+        body.Children.Add(SettingsSection("文字输出","设置自动复制、停顿判定与容易识别错误的词语。",advancedPanel));
+        body.Children.Add(SettingsSection("录音快捷键","选择按住说话，或按一下开始、再按一下结束。",ShortcutSettingsPanel()));
+        body.Children.Add(SettingsSection("软件更新","查看当前版本并获取最新更新。",UpdateSection()));
         return PageScroll(body);
     }
 
@@ -769,10 +764,7 @@ internal static partial class Desktop {
     }
     static void UpdateServerModeButtons() {
         if (lanModeButton==null || remoteModeButton==null) return;
-        lanModeButton.Background=remoteMode?T("#F0F1EE","#2E3134"):T("#26282B","#EDEEEC");
-        lanModeButton.Foreground=remoteMode?T("#5A5D62","#C7C9C8"):T("#FFFFFF","#1D1F22");
-        remoteModeButton.Background=remoteMode?T("#26282B","#EDEEEC"):T("#F0F1EE","#2E3134");
-        remoteModeButton.Foreground=remoteMode?T("#FFFFFF","#1D1F22"):T("#5A5D62","#C7C9C8");
+        SetSegmentVisual(lanModeButton,!remoteMode);SetSegmentVisual(remoteModeButton,remoteMode);
         if (lanFields!=null) lanFields.Visibility=remoteMode?Visibility.Collapsed:Visibility.Visible;
         if (remoteFields!=null) remoteFields.Visibility=remoteMode?Visibility.Visible:Visibility.Collapsed;
         if (serverHint!=null) serverHint.Text=remoteMode?
@@ -1261,14 +1253,14 @@ internal static partial class Desktop {
         mainSpinnerRotate=new RotateTransform(0,8,8);
         mainSpinner=new System.Windows.Shapes.Path {
             Data=Geometry.Parse("M 8,1.5 A 6.5,6.5 0 1 1 1.5,8"),
-            Stroke=T("#8A6A32","#E6D5B4"),StrokeThickness=2,
+            Stroke=ActionInk(),StrokeThickness=2,
             StrokeStartLineCap=PenLineCap.Round,StrokeEndLineCap=PenLineCap.Round,
             Width=16,Height=16,RenderTransform=mainSpinnerRotate,
             VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,9,0) };
         var row=new StackPanel { Orientation=Orientation.Horizontal,
             HorizontalAlignment=HorizontalAlignment.Center };
         row.Children.Add(mainSpinner);
-        row.Children.Add(Text("识别中",13,"#8A6A32","#E6D5B4",true));
+        row.Children.Add(Text("识别中",13,"#FFFFFF","#262626",true));
         return row;
     }
     // 识别等待动画的启停：状态本身由日志驱动（processing），这里只切动画相位。
@@ -1301,18 +1293,19 @@ internal static partial class Desktop {
         heroHint.Text=recording?
             (liveMode?"停顿后发送有效语音，继续说会继续输入":"结束录音后一次回写"):
             processing?(liveMode?"最后一段结果返回中，请稍候":"正在识别整段语音，结果返回后写入"):
-            connected?"连接到 "+ServerDisplay()+"  ·  "+ShortcutHint():
+            connected?ShortcutHint():
             "正在连接 "+ServerDisplay();
         // 状态灯：录音=红、识别等待=琥珀呼吸、已连接=绿、未连接=灰
-        string dotHex=recording?RecHex:processing?WarnHex:connected?OkHex:IdleHex;
-        mainStateDot.Fill=B(dotHex);
+        mainStateDot.Fill=recording?FieldInk():MutedInk();
         mainStateDot.ToolTip=recording?"正在录音":processing?"正在识别，请稍候":
             connected?"已连接服务器":"未连接服务器";
         sideStatus.Text=recording?"正在录音":processing?"识别中":connected?"服务已连接":"尚未连接";
-        sideDot.Fill=B(dotHex);
+        sideDot.Fill=connected?FieldInk():MutedInk();
+        connectionEndpoint.Text=ServerDisplay();connectionEndpoint.ToolTip=connectionEndpoint.Text;
         bool floatReady=alive&&connected;
         floatOuter.BorderBrush=floatReady?T("#55FFFFFF","#44FFFFFF"):B(WarnHex);
-        string displayText=lastText.Length>0?lastText:"等待录音。你说的话会出现在这里。";
+        string displayText=lastText.Length>0?lastText:"点击开始录音，识别文字会显示在这里。";
+        transcript.Foreground=lastText.Length>0?FieldInk():MutedInk();
         if(transcript.Text!=displayText){transcript.Text=displayText;copyResult.Content="复制";}
         copyResult.IsEnabled=!String.IsNullOrWhiteSpace(lastText);
         UpdateFloatLayout();
@@ -1322,7 +1315,7 @@ internal static partial class Desktop {
         if(processing && !recording) {
             if(!(mainRecord.Content is StackPanel)) mainRecord.Content=ProcessingContent();
         } else {
-            string label=recording?"■  结束录音":"●  开始录音";
+            string label=recording?"结束录音":"开始录音";
             if(!(mainRecord.Content is string) || (string)mainRecord.Content!=label) mainRecord.Content=label;
         }
         mainRecord.ToolTip=recording?"点击结束录音":processing?"正在识别，请稍候":null;
@@ -1330,8 +1323,8 @@ internal static partial class Desktop {
         System.Windows.Automation.AutomationProperties.SetName(floatStart,(string)floatStart.ToolTip);
         UpdateWaveAnimation();
         UpdateProcessingAnimation();
-        mainRecord.Background=recording?T("#F3E3E1","#5A3A3C"):processing?T("#F3EADB","#4E4434"):T("#26282B","#EDEEEC");
-        mainRecord.Foreground=recording?T("#9E4038","#F4E4E2"):processing?T("#8A6A32","#E6D5B4"):T("#FFFFFF","#1D1F22");
+        mainRecord.Background=ActionFill();
+        mainRecord.Foreground=ActionInk();
         mainRecord.IsEnabled=alive && (connected || recording);
         floatStart.IsEnabled=alive && connected && !processing;
         floatRecord.IsEnabled=floatCancel.IsEnabled=alive && recording;

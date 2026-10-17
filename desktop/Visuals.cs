@@ -11,7 +11,6 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using Rectangle = System.Windows.Shapes.Rectangle;
 
 internal static partial class Desktop {
@@ -68,19 +67,19 @@ internal static partial class Desktop {
         return ink.Brush;
     }
 
-    // ===== 统一低饱和色板（与网页端 admin/static/app.css 同一色系）=====
+    // 主界面只使用灰白色阶；浮窗沿用独立配色。
     // 文字层级：标题 > 小节标题 > 次要 > 辅助说明
-    static TextBlock SectionTitle(string value) { return Text(value,13,"#33363A","#E7E8E6",true); }
-    static TextBlock Hint(string value) { return Text(value,11,"#7A7E83","#A2A5A9"); }
-    static TextBlock FieldLabel(string value) { return Text(value,11,"#7A7E83","#A2A5A9"); }
+    static TextBlock SectionTitle(string value) { return Text(value,15,"#262626","#F4F4F4",true); }
+    static TextBlock Hint(string value) { return Text(value,13,"#737373","#B3B3B3"); }
+    static TextBlock FieldLabel(string value) { return Text(value,13,"#666666","#C2C2C2"); }
     // 表面与控件底色
-    static Brush PageBg() { return T("#F6F7F5","#141517"); }
-    static Brush CardBg() { return T("#FFFFFF","#1D1F22"); }
-    static Brush CardLine() { return T("#E6E7E4","#35383C"); }
-    static Brush ChipBg() { return T("#F0F1EE","#2C2F32"); }
-    static Brush FieldBg() { return T("#FBFBFA","#232529"); }
-    static Brush FieldLine() { return T("#D8DAD6","#484B50"); }
-    static Brush FieldInk() { return T("#202226","#F0F1EF"); }
+    static Brush PageBg() { return T("#FFFFFF","#262626"); }
+    static Brush CardBg() { return T("#FFFFFF","#262626"); }
+    static Brush CardLine() { return T("#E8E8E8","#444444"); }
+    static Brush ChipBg() { return T("#F3F3F3","#333333"); }
+    static Brush FieldBg() { return T("#FFFFFF","#303030"); }
+    static Brush FieldLine() { return T("#DEDEDE","#505050"); }
+    static Brush FieldInk() { return T("#262626","#F4F4F4"); }
     // 语义状态色（连接/录音/告警），低饱和
     static string OkHex { get { return darkTheme?"#6FBC92":"#5FA982"; } }
     static string RecHex { get { return darkTheme?"#E5837C":"#D96A64"; } }
@@ -89,12 +88,12 @@ internal static partial class Desktop {
 
     static void ApplyTheme() {
         foreach (var ink in inks.Values) ink.Refresh();
-        if (themeButton != null) themeButton.Content = darkTheme ? "☀  浅色" : "☾  深色";
+        if (themeButton != null) themeButton.Content=IconLabel(darkTheme?"sun":"moon",darkTheme?"白色":"灰色");
         ApplyGlass();
     }
     static TextBlock Text(string value, int size, string light, string dark, bool bold=false) {
         return new TextBlock { Text=value, FontSize=size, Foreground=T(light,dark),
-            FontWeight=bold ? FontWeights.SemiBold : FontWeights.Normal,
+            FontWeight=bold ? FontWeights.Medium : FontWeights.Normal,
             VerticalAlignment=VerticalAlignment.Center };
     }
     static Button ThemeButton(string title, string lightBg, string darkBg, string lightFg,
@@ -104,41 +103,131 @@ internal static partial class Desktop {
         button.Foreground=T(lightFg,darkFg);
         return button;
     }
-    static Border Surface(UIElement child, double padding=18) {
-        return new Border { Background=CardBg(),
-            BorderBrush=CardLine(),BorderThickness=new Thickness(1),
-            CornerRadius=new CornerRadius(14),Padding=new Thickness(padding),
-            Margin=new Thickness(0,0,0,12),Child=child };
+    static Brush MutedInk() { return T("#737373","#B3B3B3"); }
+    static Brush AccentInk() { return T("#262626","#F2F2F2"); }
+    static Brush ActionFill() { return T("#262626","#F2F2F2"); }
+    static Brush ActionInk() { return T("#FFFFFF","#262626"); }
+    static Button ActionButton(string title,bool primary=false) {
+        var button=ThemeButton(title,primary?"#262626":"#F4F4F4",primary?"#F2F2F2":"#383838",
+            primary?"#FFFFFF":"#4D4D4D",primary?"#262626":"#D9D9D9",9);
+        button.Height=40;button.FontWeight=FontWeights.Medium;button.Padding=new Thickness(14,0,14,0);return button;
     }
-    static UIElement Disclosure(string title, UIElement details) {
-        var stack=new StackPanel();
-        var head=ThemeButton("", "#FFFFFF","#1D1F22","#33363A","#E7E8E6",12);
-        head.Height=48;head.HorizontalContentAlignment=HorizontalAlignment.Stretch;
-        head.Padding=new Thickness(0);
-        var row=new Grid();
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        row.Children.Add(Text(title,13,"#33363A","#E7E8E6",true));
-        var arrow=Text("⌄",20,"#7A7E83","#A2A5A9");
-        Grid.SetColumn(arrow,1);row.Children.Add(arrow);
-        head.Content=row;
-        details.Visibility=Visibility.Collapsed;
-        head.Click+=(s,e)=>{
-            bool open=details.Visibility!=Visibility.Visible;
-            details.Visibility=open?Visibility.Visible:Visibility.Collapsed;
-            arrow.Text=open?"⌃":"⌄";
-        };
-        stack.Children.Add(head);
-        stack.Children.Add(details);
-        return Surface(stack,17);
+    static ControlTemplate InputTemplate(Type type) {
+        var border=new FrameworkElementFactory(typeof(Border));border.Name="InputBorder";
+        border.SetValue(Border.CornerRadiusProperty,new CornerRadius(8));
+        border.SetBinding(Border.BackgroundProperty,new Binding("Background") { RelativeSource=new RelativeSource(RelativeSourceMode.TemplatedParent) });
+        border.SetBinding(Border.BorderBrushProperty,new Binding("BorderBrush") { RelativeSource=new RelativeSource(RelativeSourceMode.TemplatedParent) });
+        border.SetBinding(Border.BorderThicknessProperty,new Binding("BorderThickness") { RelativeSource=new RelativeSource(RelativeSourceMode.TemplatedParent) });
+        var host=new FrameworkElementFactory(typeof(ScrollViewer));host.Name="PART_ContentHost";
+        host.SetValue(UIElement.FocusableProperty,false);
+        border.AppendChild(host);
+        var template=new ControlTemplate(type) { VisualTree=border };
+        var focus=new Trigger { Property=UIElement.IsKeyboardFocusWithinProperty,Value=true };
+        focus.Setters.Add(new Setter(Border.BorderBrushProperty,FieldInk(),"InputBorder"));
+        template.Triggers.Add(focus);return template;
+    }
+    static ControlTemplate ThinSliderTemplate() {
+        const string xaml=@"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+ xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='{x:Type Slider}'>
+ <Grid Background='Transparent' Height='32'>
+  <Grid.Resources>
+   <ControlTemplate x:Key='Line' TargetType='{x:Type RepeatButton}'>
+    <Grid Background='Transparent'><Border Height='3' VerticalAlignment='Center' Background='{TemplateBinding Background}' CornerRadius='1.5'/></Grid>
+   </ControlTemplate>
+  </Grid.Resources>
+  <Border x:Name='FocusRing' BorderBrush='{TemplateBinding Foreground}' BorderThickness='1' CornerRadius='6' Opacity='0' IsHitTestVisible='False'/>
+  <Track x:Name='PART_Track' Margin='3,0' Minimum='{TemplateBinding Minimum}' Maximum='{TemplateBinding Maximum}'
+   Value='{Binding Value, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}' Orientation='Horizontal'>
+   <Track.DecreaseRepeatButton><RepeatButton Command='{x:Static Slider.DecreaseLarge}' Focusable='False' Background='{TemplateBinding Foreground}' Template='{StaticResource Line}'/></Track.DecreaseRepeatButton>
+   <Track.IncreaseRepeatButton><RepeatButton Command='{x:Static Slider.IncreaseLarge}' Focusable='False' Background='{TemplateBinding Background}' Template='{StaticResource Line}'/></Track.IncreaseRepeatButton>
+   <Track.Thumb><Thumb Width='22' Height='28' Background='{TemplateBinding Foreground}'>
+    <Thumb.Template><ControlTemplate TargetType='{x:Type Thumb}'>
+     <Grid Background='Transparent'><Ellipse Width='14' Height='14' Fill='{TemplateBinding Background}'/></Grid>
+    </ControlTemplate></Thumb.Template>
+   </Thumb></Track.Thumb>
+  </Track>
+ </Grid>
+ <ControlTemplate.Triggers><Trigger Property='IsKeyboardFocusWithin' Value='True'><Setter TargetName='FocusRing' Property='Opacity' Value='.3'/></Trigger></ControlTemplate.Triggers>
+</ControlTemplate>";
+        return (ControlTemplate)System.Windows.Markup.XamlReader.Parse(xaml);
+    }
+    static FontFamily MainFont() {
+        return new FontFamily(new Uri(Dir), "./assets/fonts/#Noto Sans SC");
+    }
+    static Border BrandMark() {
+        string path=Path.Combine(Dir,"assets","brand-mark.png");
+        var mark=new Border { Width=32,Height=32,Background=FieldInk(),IsHitTestVisible=false };
+        if(File.Exists(path)) {
+            var image=System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(path));
+            mark.OpacityMask=new ImageBrush(image) { Stretch=Stretch.Uniform };
+        } else {
+            mark.Background=Brushes.Transparent;mark.Child=MainIcon("voice");
+        }
+        System.Windows.Automation.AutomationProperties.SetName(mark,"CapsWriter 应用标志");
+        return mark;
+    }
+    static System.Windows.Shapes.Path MainIcon(string kind) {
+        string path=kind=="logs"?"M 5,4 L 17,4 M 5,10 L 17,10 M 5,16 L 13,16 M 1,4 L 1.2,4 M 1,10 L 1.2,10 M 1,16 L 1.2,16":
+            kind=="settings"?"M 7,2 L 13,2 L 13,5 L 16,7 L 19,7 L 19,13 L 16,13 L 13,15 L 13,18 L 7,18 L 7,15 L 4,13 L 1,13 L 1,7 L 4,7 L 7,5 Z M 13,10 A 3,3 0 1 1 7,10 A 3,3 0 1 1 13,10":
+            kind=="minimize"?"M 5,10.5 L 15,10.5":
+            kind=="maximize"?"M 6.5,5.5 L 13.5,5.5 Q 14.5,5.5 14.5,6.5 L 14.5,13.5 Q 14.5,14.5 13.5,14.5 L 6.5,14.5 Q 5.5,14.5 5.5,13.5 L 5.5,6.5 Q 5.5,5.5 6.5,5.5 Z":
+            kind=="restore"?"M 7.5,4.5 L 14.5,4.5 Q 15.5,4.5 15.5,5.5 L 15.5,12.5 M 5.5,7.5 L 11.5,7.5 Q 12.5,7.5 12.5,8.5 L 12.5,14.5 Q 12.5,15.5 11.5,15.5 L 5.5,15.5 Q 4.5,15.5 4.5,14.5 L 4.5,8.5 Q 4.5,7.5 5.5,7.5 Z":
+            kind=="close"?"M 6,6 L 14,14 M 14,6 L 6,14":
+            kind=="moon"?"M 16,12 A 7,7 0 1 1 8,3 A 6,6 0 0 0 16,12 Z":
+            "M 13,10 A 3,3 0 1 1 7,10 A 3,3 0 1 1 13,10 M 10,1 L 10,3 M 10,17 L 10,19 M 1,10 L 3,10 M 17,10 L 19,10 M 4,4 L 5,5 M 15,15 L 16,16 M 4,16 L 5,15 M 15,5 L 16,4";
+        var icon=kind=="voice"?FloatGlyph("microphone"):new System.Windows.Shapes.Path { Data=Geometry.Parse(path) };
+        icon.Width=18;icon.Height=18;icon.Stretch=Stretch.Uniform;icon.Stroke=MutedInk();icon.StrokeThickness=1.6;
+        icon.StrokeStartLineCap=icon.StrokeEndLineCap=PenLineCap.Round;icon.StrokeLineJoin=PenLineJoin.Round;
+        // Fixed icon coordinates keep the single-line minimize glyph from stretching.
+        if(kind=="minimize" || kind=="maximize" || kind=="restore" || kind=="close") {
+            icon.Width=20;icon.Height=20;icon.Stretch=Stretch.None;icon.StrokeThickness=1.25;
+            icon.Stroke=FieldInk();
+        }
+        icon.HorizontalAlignment=HorizontalAlignment.Center;icon.VerticalAlignment=VerticalAlignment.Center;
+        icon.IsHitTestVisible=false;return icon;
+    }
+    static StackPanel IconLabel(string icon,string title) {
+        var row=new StackPanel { Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center };
+        var glyph=MainIcon(icon);
+        BindingOperations.SetBinding(glyph,System.Windows.Shapes.Shape.StrokeProperty,new Binding("Foreground") {
+            RelativeSource=new RelativeSource(RelativeSourceMode.FindAncestor,typeof(Button),1) });
+        row.Children.Add(glyph);
+        row.Children.Add(new TextBlock { Text=title,Margin=new Thickness(11,0,0,0),VerticalAlignment=VerticalAlignment.Center });
+        return row;
+    }
+    static Button NavigationButton(string title) {
+        var button=ActionButton(title);button.Width=84;button.Height=44;button.Padding=new Thickness(10,0,10,0);
+        button.Template=ButtonTemplate(0);button.Margin=new Thickness(3,0,3,0);
+        System.Windows.Automation.AutomationProperties.SetName(button,title);
+        System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(button,true);return button;
+    }
+    static Button ChromeButton(string icon,string title) {
+        var button=ActionButton("");button.Content=MainIcon(icon);button.Background=Brushes.Transparent;
+        button.Width=36;button.Height=36;button.Padding=new Thickness(0);button.ToolTip=title;
+        System.Windows.Automation.AutomationProperties.SetName(button,title);
+        System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(button,true);return button;
+    }
+    static StackPanel PageHeading(string title,string description) {
+        var heading=new StackPanel();heading.Children.Add(Text(title,32,"#262626","#F4F4F4",true));
+        var detail=Hint(description);detail.Margin=new Thickness(0,7,0,0);detail.TextWrapping=TextWrapping.Wrap;
+        heading.Children.Add(detail);return heading;
+    }
+    static Border SettingsSection(string title,string description,UIElement content) {
+        var section=new StackPanel();section.Children.Add(SectionTitle(title));
+        var detail=Hint(description);detail.TextWrapping=TextWrapping.Wrap;detail.Margin=new Thickness(0,7,0,17);
+        section.Children.Add(detail);section.Children.Add(content);
+        return new Border { BorderBrush=CardLine(),BorderThickness=new Thickness(0,0,0,1),
+            Padding=new Thickness(0,0,0,28),Margin=new Thickness(0,0,0,28),Child=section };
+    }
+    static void SetSegmentVisual(Button button,bool selected) {
+        button.Background=selected?T("#FFFFFF","#4A4A4A"):Brushes.Transparent;
+        button.Foreground=selected?AccentInk():MutedInk();
+        button.BorderBrush=Brushes.Transparent;button.BorderThickness=new Thickness(0);
+        System.Windows.Automation.AutomationProperties.SetItemStatus(button,selected?"已选择":"");
     }
     static void UpdateModeButtons() {
         if (liveModeButton==null || batchModeButton==null) return;
-        // 分段选中=主按钮色对；未选中=次级色对（与 SaveSettings 的主/次按钮同一套）
-        liveModeButton.Background=liveMode?T("#26282B","#EDEEEC"):T("#F0F1EE","#2E3134");
-        liveModeButton.Foreground=liveMode?T("#FFFFFF","#1D1F22"):T("#5A5D62","#C7C9C8");
-        batchModeButton.Background=liveMode?T("#F0F1EE","#2E3134"):T("#26282B","#EDEEEC");
-        batchModeButton.Foreground=liveMode?T("#5A5D62","#C7C9C8"):T("#FFFFFF","#1D1F22");
+        SetSegmentVisual(liveModeButton,liveMode);SetSegmentVisual(batchModeButton,!liveMode);
         if(modeHint!=null)modeHint.Text=liveMode?
             "说话停顿后发送这一句；持续录音时继续写入。":
             "持续录音，松开按键或结束录音后一次回写。";
@@ -168,7 +257,7 @@ internal static partial class Desktop {
      <Track.DecreaseRepeatButton><RepeatButton Command='{x:Static ScrollBar.PageUpCommand}' Opacity='0'/></Track.DecreaseRepeatButton>
      <Track.Thumb><Thumb>
       <Thumb.Template><ControlTemplate TargetType='{x:Type Thumb}'>
-       <Border Background='#9A9DA1' CornerRadius='4' Margin='2,1'/>
+       <Border Background='#A3A3A3' CornerRadius='4' Margin='2,1'/>
       </ControlTemplate></Thumb.Template>
      </Thumb></Track.Thumb>
      <Track.IncreaseRepeatButton><RepeatButton Command='{x:Static ScrollBar.PageDownCommand}' Opacity='0'/></Track.IncreaseRepeatButton>
@@ -178,19 +267,6 @@ internal static partial class Desktop {
  </Setter.Value></Setter>
 </Style>";
         return (Style)System.Windows.Markup.XamlReader.Parse(xaml);
-    }
-    static Image AppMark(double size) {
-        var image=new Image { Width=size,Height=size,Stretch=Stretch.Uniform };
-        var path=Path.Combine(Dir,"assets","icon.png");
-        if (File.Exists(path)) {
-            var bitmap=new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.CacheOption=BitmapCacheOption.OnLoad;
-            bitmap.UriSource=new Uri(path,UriKind.Absolute);
-            bitmap.EndInit(); bitmap.Freeze();
-            image.Source=bitmap;
-        }
-        return image;
     }
     static void LoadUiPrefs() {
         try {

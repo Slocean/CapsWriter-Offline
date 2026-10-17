@@ -136,7 +136,7 @@ internal static partial class Desktop {
         Clipboard.Busy=false;lastText="";
         CopyResult(false);
         Check(Clipboard.Writes==writes+1,"empty placeholder never copied");
-        CheckWaveform();
+        CheckWaveform();CheckMainRedesign();
         Console.WriteLine("PASS: full-text copy, native topmost, slower waveform, completion style/timer/preferences and lifecycle transitions");
     }
     static void CheckWaveform() {
@@ -180,7 +180,7 @@ internal static partial class Desktop {
         ApplyTheme();
         using(tray=new System.Windows.Forms.NotifyIcon())UpdateDisplay();
         for(int i=0;i<18;i++)AdvanceWave(i%11<7?.02+(i%7)*.012:0,84);
-        string preview=Environment.GetEnvironmentVariable("CAPSWRITER_UI_PREVIEW_DIR");
+        string preview=Environment.GetEnvironmentVariable("CAPSWRITER_FLOAT_PREVIEW_DIR");
         if(!String.IsNullOrEmpty(preview)) {
             Directory.CreateDirectory(preview);
             RenderPreview(floatOuter,220,System.IO.Path.Combine(preview,"listening.png"));
@@ -191,7 +191,6 @@ internal static partial class Desktop {
             RenderPreview(floatOuter,220,System.IO.Path.Combine(preview,"complete.png"));
             floatCompleted=false;UpdateFloatLayout();
             RenderPreview(floatOuter,56,System.IO.Path.Combine(preview,"idle.png"));
-            RenderPreview((FrameworkElement)transcript.Parent,500,System.IO.Path.Combine(preview,"copy-result.png"));
         }
         recording=false;backend=null;UpdateWaveAnimation();
         foreach(var bar in waveBars)Check(bar.Height==2,"recording stop resets waveform");
@@ -322,6 +321,165 @@ internal static partial class Desktop {
             completionSlider.Value=1;
         }
         backend=null;awaitingAudio=false;floatCancelled=false;
+    }
+    static Rect MainBounds(FrameworkElement control) {
+        return control.TransformToAncestor((FrameworkElement)main.Content).TransformBounds(new Rect(0,0,control.ActualWidth,control.ActualHeight));
+    }
+    static void ArrangeMain(int width,int height) {
+        var root=(FrameworkElement)main.Content;
+        root.Measure(new Size(width,height));root.Arrange(new Rect(0,0,width,height));root.UpdateLayout();
+    }
+    static Button FindAction(DependencyObject root,string title) {
+        var button=root as Button;
+        if(button!=null && button.Content as string==title)return button;
+        foreach(object child in LogicalTreeHelper.GetChildren(root)) {
+            var node=child as DependencyObject;if(node==null)continue;
+            var found=FindAction(node,title);if(found!=null)return found;
+        }
+        return null;
+    }
+    static double Luminance(Brush brush) {
+        var color=((SolidColorBrush)brush).Color;
+        double[] channels={color.R/255.0,color.G/255.0,color.B/255.0};
+        for(int i=0;i<3;i++)channels[i]=channels[i]<=.04045?channels[i]/12.92:Math.Pow((channels[i]+.055)/1.055,2.4);
+        return .2126*channels[0]+.7152*channels[1]+.0722*channels[2];
+    }
+    static void CheckContrast(Brush foreground,Brush background) {
+        double a=Luminance(foreground),b=Luminance(background);
+        Check((Math.Max(a,b)+.05)/(Math.Min(a,b)+.05)>=4.5,"readable main-window text contrast in both themes");
+    }
+    static void RenderMainPreview(string directory,string name) {
+        ArrangeMain(1040,760);
+        var bitmap=new RenderTargetBitmap(1040,760,96,96,PixelFormats.Pbgra32);
+        bitmap.Render((FrameworkElement)main.Content);
+        var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using(var file=File.Create(System.IO.Path.Combine(directory,name)))encoder.Save(file);
+    }
+    static void CheckMainRedesign() {
+        foreach(var weight in new[]{FontWeights.Normal,FontWeights.Medium}) {
+            GlyphTypeface glyph;
+            Check(new Typeface(main.FontFamily,FontStyles.Normal,weight,FontStretches.Normal).TryGetGlyphTypeface(out glyph),
+                "main font resolves to a real glyph typeface");
+            string fontPath=System.IO.Path.GetFullPath(glyph.FontUri.LocalPath);
+            Check(fontPath.StartsWith(System.IO.Path.Combine(Dir,"assets","fonts")+System.IO.Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase),
+                "regular and medium text use the bundled font, never an installed substitute");
+            Check(glyph.CharacterToGlyphMap.ContainsKey('语') && glyph.CharacterToGlyphMap.ContainsKey('A'),
+                "bundled typeface contains Chinese and Latin glyphs");
+            Check(glyph.Weight==weight,"headings use the real medium face instead of synthetic bold");
+        }
+        var header=(Grid)((Border)((Grid)main.Content).Children[0]).Child;
+        var brand=(StackPanel)header.Children[0];
+        var mark=(Border)brand.Children[0];
+        Check(mark.OpacityMask is ImageBrush && ((ImageBrush)mark.OpacityMask).ImageSource.Width>0,
+            "actual top-left mark loads the generated image asset");
+        foreach(string kind in new[]{"minimize","maximize","restore","close"}) {
+            var button=ChromeButton(kind,kind);var icon=(System.Windows.Shapes.Path)button.Content;
+            button.Measure(new Size(36,36));button.Arrange(new Rect(0,0,36,36));button.UpdateLayout();
+            var bounds=VisualTreeHelper.GetContentBounds(icon);
+            Check(bounds.Width>=8 && bounds.Width<=13 && bounds.Height<=13,
+                "window controls keep compact optical size without geometry stretching");
+            Check(kind!="minimize" || bounds.Height<=2,"minimize stays a thin centered line");
+            Check(button.Focusable && button.IsTabStop && System.Windows.Shell.WindowChrome.GetIsHitTestVisibleInChrome(button),
+                "new window controls remain reachable by keyboard and titlebar hit testing");
+        }
+        backend=System.Diagnostics.Process.GetCurrentProcess();connected=true;recording=false;
+        pendingTasks.Clear();awaitingAudio=false;floatCompleted=false;floatCancelled=false;
+        host.Text="192.168.1.10";port.Text="6006";urlField.Text="wss://voice.example.com";
+        string longText=String.Concat(System.Linq.Enumerable.Repeat("很长的识别结果仍然可以完整选取和复制，不会挤走底部的录音按钮。\n",80));
+        lastText=longText;
+        using(tray=new System.Windows.Forms.NotifyIcon()) {
+            for(int theme=0;theme<2;theme++) {
+                darkTheme=theme==1;ApplyTheme();SelectMainTab(0);UpdateDisplay();
+                CheckContrast(FieldInk(),CardBg());CheckContrast(MutedInk(),PageBg());CheckContrast(ActionInk(),ActionFill());
+                CheckContrast(mark.Background,PageBg());
+                foreach(Brush brush in new[]{PageBg(),CardBg(),CardLine(),ChipBg(),FieldBg(),FieldLine(),FieldInk(),MutedInk(),ActionFill(),ActionInk()}) {
+                    var color=((SolidColorBrush)brush).Color;
+                    Check(color.R==color.G && color.G==color.B,"white and gray themes must stay monochrome");
+                }
+                foreach(int width in new[]{820,1040,1440}) {
+                    ArrangeMain(width,620);
+                    foreach(var button in new[]{voiceTabButton,settingsTabButton,logsTabButton,mainRecord,copyResult,liveModeButton,batchModeButton,themeButton}) {
+                        var bounds=MainBounds(button);
+                        Check(bounds.Left>=0 && bounds.Top>=0 && bounds.Right<=width+.5 && bounds.Bottom<=620.5 && button.ActualWidth>0,
+                            "primary controls stay visible at minimum and wide window sizes");
+                        Check(button.Focusable && button.IsTabStop,"main controls remain keyboard reachable");
+                    }
+                    Check(transcript.ActualHeight>180,"recognition text uses the main canvas instead of a short fixed-height box");
+                    Check(MainBounds(copyResult).Bottom<=MainBounds(transcript).Top+.5,"copy action does not overlap result text");
+                    foreach(var tab in new[]{voiceTabButton,settingsTabButton,logsTabButton})
+                        Check(MainBounds(tab).Bottom<=72 && MainBounds(tab).Bottom<MainBounds(transcript).Top,
+                            "navigation belongs to the top bar, not a left sidebar");
+                    for(DependencyObject parent=LogicalTreeHelper.GetParent(transcript);parent!=null && parent!=main;parent=LogicalTreeHelper.GetParent(parent)) {
+                        var border=parent as Border;
+                        Check(border==null || (border.BorderThickness.Left==0 && border.BorderThickness.Right==0),
+                            "recognized text is a continuous page without a surrounding card");
+                    }
+                    Check(MainBounds(mainRecord).Bottom<MainBounds(transcript).Top,"recording controls remain above and outside scrolling text");
+                }
+                double shortHeight=transcript.ActualHeight;ArrangeMain(1040,960);
+                Check(transcript.ActualHeight>shortHeight+200,"recognition canvas expands vertically with the window");
+                Check(transcript.ExtentHeight>transcript.ViewportHeight,"long results scroll inside the text canvas");
+                transcript.Select(4,12);
+                copyResult.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Check(Clipboard.Value==longText,"redesigned result action still copies the whole result");
+                string retained=logBox.Text;
+                logsTabButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));ArrangeMain(820,620);
+                Check(logsPage.Visibility==Visibility.Visible && voicePage.Visibility==Visibility.Collapsed && settingsPage.Visibility==Visibility.Collapsed,
+                    "log navigation shows a dedicated page without rebuilding controls");
+                Check(logBox.Text==retained && logBox.ActualHeight>300,"log navigation retains accumulated output and has usable space");
+                settingsTabButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));ArrangeMain(820,620);
+                Check(settingsPage.Visibility==Visibility.Visible && logsPage.Visibility==Visibility.Collapsed,"settings navigation works");
+                var settingsScroll=(ScrollViewer)settingsPage;
+                Check(settingsScroll.ScrollableHeight>0,"all settings remain available through vertical scrolling");
+                foreach(bool remote in new[]{false,true}) {
+                    remoteMode=remote;UpdateServerModeButtons();settingsScroll.ScrollToTop();ArrangeMain(820,620);
+                    var active=(FrameworkElement)(remote?remoteFields:lanFields);
+                    Check(active.Visibility==Visibility.Visible && MainBounds(active).Right<=820.5,"both connection forms fit the minimum width");
+                }
+                Check(FindAction(main,"保存识别设置")!=null && FindSwitch(main,"识别完成后自动复制到剪贴板")!=null &&
+                    FindSwitch(main,"浮窗始终置于最顶层")!=null,"recognition save, copy and floating controls remain available");
+                completionSlider.ApplyTemplate();
+                var track=(System.Windows.Controls.Primitives.Track)completionSlider.Template.FindName("PART_Track",completionSlider);
+                Check(track!=null && track.Thumb!=null,"restyled slider retains a real draggable WPF track");
+                completionSlider.Value=1;
+                Slider.IncreaseSmall.Execute(null,completionSlider);
+                Check(completionSlider.Value==1.5 && floatCompletionSeconds==1.5,"keyboard slider commands still update and save the chosen duration");
+                completionSlider.Value=1;
+                remoteMode=false;UpdateServerModeButtons();settingsScroll.ScrollToTop();ArrangeMain(820,620);
+                host.ApplyTemplate();apiKeyField.ApplyTemplate();
+                var firstCharacter=host.GetRectFromCharacterIndex(0);
+                Check(firstCharacter.Left>=8 && firstCharacter.Top>=0 && firstCharacter.Bottom<=host.ActualHeight,
+                    "restyled input keeps readable text padding without vertical clipping");
+                Check(host.Template.FindName("PART_ContentHost",host)!=null && apiKeyField.Template.FindName("PART_ContentHost",apiKeyField)!=null,
+                    "modern fields preserve native text and masked password hosts");
+                settingsScroll.ScrollToBottom();ArrangeMain(820,620);
+                Check(MainBounds(updateButton).Bottom<=620.5,"software update action remains reachable at the end of settings");
+                voiceTabButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));ArrangeMain(1040,760);
+                Check(transcript.Text==longText,"navigation preserves recognized text and selection state");
+            }
+            bool previousTheme=darkTheme;
+            var previousBackground=((SolidColorBrush)PageBg()).Color;
+            themeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(darkTheme!=previousTheme && ((SolidColorBrush)PageBg()).Color!=previousBackground,"actual theme button switches the whole white/gray appearance");
+            bool chosenTheme=darkTheme;darkTheme=previousTheme;LoadUiPrefs();
+            Check(darkTheme==chosenTheme,"white/gray appearance choice persists");
+            string preview=Environment.GetEnvironmentVariable("CAPSWRITER_UI_PREVIEW_DIR");
+            if(!String.IsNullOrEmpty(preview)) {
+                Directory.CreateDirectory(preview);
+                lastText="今天的会议安排在下午三点。\n请提前准备项目进展和需要讨论的问题。\n\n识别文字会保留在这里，随时可以选取或一键复制。";
+                darkTheme=false;ApplyTheme();remoteMode=false;UpdateServerModeButtons();SelectMainTab(0);UpdateDisplay();
+                RenderMainPreview(preview,"main-white.png");
+                darkTheme=true;ApplyTheme();RenderMainPreview(preview,"main-gray.png");
+                darkTheme=false;ApplyTheme();SelectMainTab(1);((ScrollViewer)settingsPage).ScrollToTop();
+                RenderMainPreview(preview,"settings-white.png");
+                darkTheme=true;ApplyTheme();RenderMainPreview(preview,"settings-gray.png");
+                SelectMainTab(2);logBox.Text="预览示例\n\n12:34:56  服务已连接\n12:35:03  开始录音\n12:35:08  音频已提交\n12:35:09  识别完成";
+                darkTheme=false;ApplyTheme();RenderMainPreview(preview,"logs-white.png");
+                darkTheme=true;ApplyTheme();RenderMainPreview(preview,"logs-gray.png");
+            }
+        }
+        backend=null;recording=false;pendingTasks.Clear();awaitingAudio=false;
+        SelectMainTab(0);floatCompleteTick.Stop();
     }
     static void RenderPreview(FrameworkElement element,int width,string path) {
         element.Measure(new Size(width,Double.PositiveInfinity));

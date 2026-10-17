@@ -21,8 +21,7 @@ internal static partial class Desktop {
     static bool capturePaused;
 
     static UIElement ShortcutSettingsPanel() {
-        var panel=new StackPanel { Margin=new Thickness(0,13,0,0) };
-        panel.Children.Add(FieldLabel("录音快捷键"));
+        var panel=new StackPanel();
         holdHotkey=Switch("启用");
         toggleHotkey=Switch("启用");
         holdHotkey.IsChecked=true;
@@ -62,11 +61,11 @@ internal static partial class Desktop {
 
     static Grid ShortcutRow(string label,Button keyButton,CheckBox enabled) {
         var row=new Grid { Margin=new Thickness(0,8,0,0) };
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(90) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(100) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
-        // 94px 容纳开关(36)+间距(10)+"启用"文字——80px 在 640 最小宽下会裁掉文字
+        // 给开关和“启用”文字保留完整宽度。
         row.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(94) });
-        row.Children.Add(Text(label,12,"#33363A","#E7E8E6",true));
+        row.Children.Add(Text(label,13,"#262626","#F4F4F4",true));
         keyButton.HorizontalAlignment=HorizontalAlignment.Stretch;
         Grid.SetColumn(keyButton,1);row.Children.Add(keyButton);
         enabled.Margin=new Thickness(8,0,0,0);
@@ -75,8 +74,8 @@ internal static partial class Desktop {
     }
 
     static Button ShortcutCaptureButton() {
-        var button=ThemeButton("","#F3F4F1","#2A2C30","#33363A","#E7E8E6",8);
-        button.Height=36;
+        var button=ActionButton("");
+        button.Height=40;
         button.HorizontalContentAlignment=HorizontalAlignment.Left;
         button.Padding=new Thickness(12,0,10,0);
         return button;

@@ -1,0 +1,6 @@
+Mode: built-in imagegen
+Use case: logo-brand
+
+Create one polished app icon asset for CapsWriter, a modern desktop voice-to-text application. A distinctive minimal monogram formed by a single continuous rounded ribbon: an open C-shaped speech loop integrated with a small vertical writing cursor / voice slit. Recognizable silhouette at 24 pixels, balanced geometric curves, deliberately simple negative space, quiet Swiss typography-inspired precision. Center a solid near-black (#262626) symbol on transparent background. Use only near-black opaque shapes and transparent negative space; no white background, no colors, no gradients, no shadows, no 3D, no texture, no lettering, no wordmark, no generic microphone drawing, no surrounding rounded-square container. One icon only, centered with tight optical padding, square composition. Production-quality flat 2D vector-like app mark, crisp smooth edges.
+
+The application uses the generated alpha channel and theme color for an even monochrome fill.

@@ -28,7 +28,8 @@ PYCACHE = "__pycache__"
 # 客户端源码白名单：core 下只带这些（严禁 core/server）
 CORE_ROOT_FILES = ["__init__.py", "constants.py", "logger.py", "protocol.py"]
 CORE_SUBDIRS = ["client", "tools", "ui"]
-ASSET_FILES = ["icon.ico", "icon.png"]
+ASSET_FILES = ["icon.ico", "icon.png", "brand-mark.png",
+               "fonts/NotoSansSC-Regular.otf", "fonts/NotoSansSC-Medium.otf", "fonts/OFL.txt"]
 USER_FILES = ["config_client.py", "hot.txt", "hot-server.txt", "hot-rule.txt"]
 FORBIDDEN_BASENAMES = ["credentials.json", ".env"]
 
@@ -72,6 +73,9 @@ def verify_payload(payload: pathlib.Path) -> dict:
     for name in ("start_client.exe", "CapsWriterDesktop.exe", "config_client.py", "update-setup-wrapper.ps1"):
         if not (payload / name).is_file():
             errors.append(f"缺少 {name}")
+    for name in ASSET_FILES:
+        if not (payload / "assets" / name).is_file():
+            errors.append(f"缺少 assets/{name}")
     if not (payload / "internal").is_dir():
         errors.append("缺少 internal/")
     if not (payload / "internal/_sounddevice_data/portaudio-binaries/README.md").is_file():
