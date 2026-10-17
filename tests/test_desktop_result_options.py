@@ -1,5 +1,6 @@
 """Compile the real WPF code; use hidden controls and a fake clipboard, no input hooks/backend."""
 import pathlib
+import ctypes
 import hashlib
 import runpy
 import shutil
@@ -32,7 +33,10 @@ class DesktopResultOptionsTests(unittest.TestCase):
             args += [str(version), str(ROOT / 'tests/desktop_result_options.cs')]
             built = subprocess.run(args, capture_output=True, text=True, timeout=120)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-            ran = subprocess.run([str(exe)], capture_output=True, timeout=60)
+            # Match hosted Windows runners, whose TEMP path can use an 8.3 alias.
+            launch_dir = ctypes.create_unicode_buffer(32768)
+            self.assertGreater(ctypes.windll.kernel32.GetShortPathNameW(directory, launch_dir, len(launch_dir)), 0)
+            ran = subprocess.run([str(pathlib.Path(launch_dir.value) / exe.name)], capture_output=True, timeout=60)
             self.assertEqual(ran.returncode, 0, (ran.stdout + ran.stderr).decode('utf-8', 'replace'))
             self.assertIn(b'PASS:', ran.stdout)
 

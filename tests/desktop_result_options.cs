@@ -355,14 +355,25 @@ internal static partial class Desktop {
         var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using(var file=File.Create(System.IO.Path.Combine(directory,name)))encoder.Save(file);
     }
+    [System.Runtime.InteropServices.DllImport("kernel32.dll",EntryPoint="GetLongPathNameW",CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern uint GetLongFontPath(string path,StringBuilder buffer,uint capacity);
+    static string LongFontPath(string path) {
+        var buffer=new StringBuilder(32768);
+        uint length=GetLongFontPath(path,buffer,(uint)buffer.Capacity);
+        Check(length>0 && length<buffer.Capacity,"font path resolves to its long Windows name");
+        return buffer.ToString();
+    }
     static void CheckMainRedesign() {
         foreach(var weight in new[]{FontWeights.Normal,FontWeights.Medium}) {
             GlyphTypeface glyph;
             Check(new Typeface(main.FontFamily,FontStyles.Normal,weight,FontStretches.Normal).TryGetGlyphTypeface(out glyph),
                 "main font resolves to a real glyph typeface");
-            string fontPath=System.IO.Path.GetFullPath(glyph.FontUri.LocalPath);
-            Check(fontPath.StartsWith(System.IO.Path.Combine(Dir,"assets","fonts")+System.IO.Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase),
-                "regular and medium text use the bundled font, never an installed substitute");
+            string fontPath=LongFontPath(glyph.FontUri.LocalPath);
+            string expected=System.IO.Path.Combine(Dir,"assets","fonts",weight==FontWeights.Normal?"NotoSansSC-Regular.otf":"NotoSansSC-Medium.otf");
+            // WPF expands Windows 8.3 paths; compare canonical names on both sides.
+            string expectedPath=LongFontPath(expected);
+            Check(String.Equals(fontPath,expectedPath,StringComparison.OrdinalIgnoreCase),
+                "bundled font mismatch: actual="+fontPath+"; expected="+expectedPath);
             Check(glyph.CharacterToGlyphMap.ContainsKey('语') && glyph.CharacterToGlyphMap.ContainsKey('A'),
                 "bundled typeface contains Chinese and Latin glyphs");
             Check(glyph.Weight==weight,"headings use the real medium face instead of synthetic bold");
