@@ -58,4 +58,4 @@ def test_udp_meter_is_fresh_bounded_and_read_only():
         controller._handle_command('LEVEL', address)
         assert sent[-1] == b'LEVEL|0.000000', 'stalled capture returns silence'
     controller._handle_command('STATE', address)
-    assert sent[-1].endswith(b'|meter=1')
+    assert b'meter=1' in sent[-1].split(b'|')

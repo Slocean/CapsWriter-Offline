@@ -62,7 +62,9 @@ internal static partial class Desktop {
     // 退出清空。多段识别各自独立，不会因单个 final 提前熄灯或整体卡住。
     static readonly System.Collections.Generic.HashSet<string> pendingTasks
         =new System.Collections.Generic.HashSet<string>();
-    static bool processing { get { return pendingTasks.Count>0; } }
+    static bool captureEventsSupported, awaitingAudio;
+    static string captureSession;
+    static bool processing { get { return pendingTasks.Count>0 || (captureEventsSupported && awaitingAudio && !recording); } }
     // 主窗口双 Tab（语音输入/设置）与识别等待状态灯
     static Button voiceTabButton, settingsTabButton;
     static UIElement voicePage, settingsPage;
@@ -134,6 +136,10 @@ internal static partial class Desktop {
         border.Name="Root";
         border.SetValue(Border.CornerRadiusProperty,new CornerRadius(radius));
         border.SetBinding(Border.BackgroundProperty,new System.Windows.Data.Binding("Background") {
+            RelativeSource=new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent) });
+        border.SetBinding(Border.BorderBrushProperty,new System.Windows.Data.Binding("BorderBrush") {
+            RelativeSource=new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent) });
+        border.SetBinding(Border.BorderThicknessProperty,new System.Windows.Data.Binding("BorderThickness") {
             RelativeSource=new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent) });
         var layer=new FrameworkElementFactory(typeof(Grid));
         var content=new FrameworkElementFactory(typeof(ContentPresenter));
@@ -515,6 +521,22 @@ internal static partial class Desktop {
         glassValue=Text("",11,"#5A5D62","#C7C9C8");
         Grid.SetColumn(glassValue,2);glassRow.Children.Add(glassValue);
         appearance.Children.Add(glassRow);
+        var completionRow=new Grid { Margin=new Thickness(0,13,0,0) };
+        completionRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(140) });
+        completionRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });
+        completionRow.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(48) });
+        completionRow.Children.Add(Text("完成提示停留（秒）",11,"#7A7E83","#A2A5A9"));
+        completionSlider=new Slider { Minimum=.5,Maximum=10,Value=floatCompletionSeconds,
+            VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,12,0),
+            TickFrequency=.5,IsSnapToTickEnabled=true };
+        System.Windows.Automation.AutomationProperties.SetName(completionSlider,"完成提示停留秒数");
+        completionSlider.ValueChanged+=(s,e)=>{
+            floatCompletionSeconds=completionSlider.Value;UpdateCompletionSetting();SaveUiPrefs();
+        };
+        Grid.SetColumn(completionSlider,1);completionRow.Children.Add(completionSlider);
+        completionValue=Text("",11,"#5A5D62","#C7C9C8");
+        Grid.SetColumn(completionValue,2);completionRow.Children.Add(completionValue);
+        UpdateCompletionSetting();appearance.Children.Add(completionRow);
         body.Children.Add(Disclosure("浮窗设置",appearance));
 
         var advancedPanel=new StackPanel { Margin=new Thickness(0,2,0,2) };
@@ -586,6 +608,8 @@ internal static partial class Desktop {
         layers.Children.Add(floatStart);
         waveTick=new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(16) };
         waveTick.Tick+=(s,e)=>AnimateWave();
+        floatCompleteTick=new DispatcherTimer();
+        floatCompleteTick.Tick+=(s,e)=>{floatCompleteTick.Stop();floatCompleted=false;UpdateDisplay();};
         floatOuter.Child=layers;
         floatOuter.MouseLeftButtonDown+=(s,e)=>{
             if(e.LeftButton!=MouseButtonState.Pressed)return;
@@ -980,7 +1004,7 @@ internal static partial class Desktop {
     static void ApplyStateReply(string reply) {
         if(reply==null || !reply.StartsWith("STATE|")) return;
         bool rec=recording; long startedEpoch=0;
-        meterSupported=false;
+        meterSupported=false;captureEventsSupported=false;
         var parts=reply.Split('|');
         foreach(var p in parts) {
             if(p.StartsWith("recording=")) rec=p=="recording=1";
@@ -989,8 +1013,9 @@ internal static partial class Desktop {
                 System.Globalization.NumberStyles.Integer,
                 System.Globalization.CultureInfo.InvariantCulture,out startedEpoch);
             else if(p=="meter=1") meterSupported=true;
+            else if(p=="capture=1") captureEventsSupported=true;
         }
-        if(rec && !recording){floatCompleted=false;floatCancelled=false;}
+        if(rec && !recording){floatCompleted=false;floatCancelled=false;awaitingAudio=true;captureSession=null;}
         recording=rec;
         if(rec && startedEpoch>0)
             started=new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc).AddSeconds(startedEpoch).ToLocalTime();
@@ -1037,7 +1062,7 @@ internal static partial class Desktop {
             if(!ownsBackend) { MessageBox.Show("已有其他程序启动的客户端。请先退出旧客户端，再重试。"); return false; }
             backend.Kill(); backend.WaitForExit(5000);
         }
-        backend=null; ownsBackend=false; connected=false; recording=false; pendingTasks.Clear();
+        backend=null; ownsBackend=false; connected=false; recording=false; pendingTasks.Clear();awaitingAudio=false;
         StartBackend();
         return true;
     }
@@ -1097,7 +1122,7 @@ internal static partial class Desktop {
     }
     static bool ApplyCancelReply(string reply) {
         if(reply!="CANCELLED")return false;
-        recording=false;floatCompleted=false;floatCancelled=true;
+        recording=false;floatCompleted=false;floatCancelled=true;awaitingAudio=false;
         return true;
     }
     static void CancelRecording() {
@@ -1112,7 +1137,7 @@ internal static partial class Desktop {
             using(var f=new FileStream(Log,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)) {
                 // 日志被新客户端进程截断重建：偏移复位、历史边界作废（之后全实时）
                 if(f.Length<replayBoundary) replayBoundary=0;
-                if(f.Length<logPosition){logPosition=0;partialLine="";connected=false;pendingTasks.Clear();replayBoundary=0;}
+                if(f.Length<logPosition){logPosition=0;partialLine="";connected=false;pendingTasks.Clear();awaitingAudio=false;replayBoundary=0;}
                 if(f.Length==logPosition) return;
                 // 历史字节边界：replayBoundary 之前只展示不塑形，之后全实时。
                 // 空文件/新日志时 boundary=0，新进程最早的事件不会误判为历史。
@@ -1148,6 +1173,7 @@ internal static partial class Desktop {
     }
     // 识别状态机（真实日志驱动，无定时假状态）：
     // - 触发/释放：开始、结束录音（recording）；
+    // - 录音停止后先等对应会话的录音结束事件，再交接给 pendingTasks；
     // - 识别等待 = pendingTasks（未完成识别任务集）：客户端“任务生命周期:
     //   提交/完成/发送失败 <task_id>”事件驱动——提交入集、完成/发送失败
     //   按 id 移除；多段识别各自独立，单个 final 只结束自己的任务；
@@ -1190,17 +1216,23 @@ internal static partial class Desktop {
             return;
         }
         if(line.Contains("WebSocket 建立成功")) { if(!historical) connected=true; }
-        if(line.Contains("WebSocket") && (line.Contains("断开")||line.Contains("关闭")||line.Contains("失败"))) { if(!historical) { connected=false; pendingTasks.Clear();floatCompleted=false; } }
-        if(line.Contains("HTTP 401")||line.Contains("令牌")||line.Contains("API Key")) { if(!historical) { connected=false; pendingTasks.Clear();floatCompleted=false; } }
+        if(line.Contains("WebSocket") && (line.Contains("断开")||line.Contains("关闭")||line.Contains("失败"))) { if(!historical) { connected=false; pendingTasks.Clear();floatCompleted=false;awaitingAudio=false; } }
+        if(line.Contains("HTTP 401")||line.Contains("令牌")||line.Contains("API Key")) { if(!historical) { connected=false; pendingTasks.Clear();floatCompleted=false;awaitingAudio=false; } }
         string taskId;
-        if((taskId=TaskEventId(line,"任务生命周期: 提交 "))!=null) { if(!historical) pendingTasks.Add(taskId); }
+        if((taskId=TaskEventId(line,"任务生命周期: 录音开始 "))!=null) {
+            if(!historical){captureEventsSupported=true;captureSession=taskId;awaitingAudio=true;}
+        }
+        else if((taskId=TaskEventId(line,"任务生命周期: 录音结束 "))!=null) {
+            if(!historical && (captureSession==null || captureSession==taskId))awaitingAudio=false;
+        }
+        else if((taskId=TaskEventId(line,"任务生命周期: 提交 "))!=null) { if(!historical) pendingTasks.Add(taskId); }
         else if((taskId=TaskEventId(line,"任务生命周期: 完成 "))!=null) { if(!historical) pendingTasks.Remove(taskId); }
         else if((taskId=TaskEventId(line,"任务生命周期: 发送失败 "))!=null) { if(!historical) { pendingTasks.Remove(taskId);floatCompleted=false; } }
-        if(line.Contains("触发：开始录音")) { if(!historical) { recording=true; started=DateTime.Now; lastText=""; finalText=""; floatCompleted=false;floatCancelled=false; } }
+        if(line.Contains("触发：开始录音")) { if(!historical) { recording=true; started=DateTime.Now; lastText=""; finalText=""; floatCompleted=false;floatCancelled=false;awaitingAudio=true;captureSession=null; } }
         if(line.Contains("释放：完成录音")) { if(!historical) recording=false; }
         // 取消/错误只结束录音本身；不清 pendingTasks（旧在途任务不受影响）
-        if(line.Contains("录音任务被取消")||line.Contains("取消录音任务")) { if(!historical) { recording=false;floatCompleted=false;floatCancelled=true; } }
-        if(line.Contains("录音任务错误")) { if(!historical) { recording=false;floatCompleted=false; } }
+        if(line.Contains("录音任务被取消")||line.Contains("取消录音任务")) { if(!historical) { recording=false;floatCompleted=false;floatCancelled=true;awaitingAudio=false; } }
+        if(line.Contains("录音任务错误")) { if(!historical) { recording=false;floatCompleted=false;awaitingAudio=false; } }
         // 客户端忽略命令的真实回声：UI 与客户端状态错位时实时校正
         if(line.Contains("忽略 STOP 命令")) { if(!historical) recording=false; }
         if(line.Contains("忽略 START 命令")) { if(!historical) { recording=true; started=DateTime.Now; } }
@@ -1261,7 +1293,7 @@ internal static partial class Desktop {
     static void UpdateDisplay() {
         bool alive=backend!=null && !backend.HasExited;
         // 后端退出 / 断线：识别等待立即清空（真实终态，不用超时假清除）
-        if(!alive || !connected) pendingTasks.Clear();
+        if(!alive || !connected){pendingTasks.Clear();awaitingAudio=false;}
         if(!alive){recording=false;floatCompleted=false;}
         string state=!alive?"客户端未运行":recording?"正在录音  "+(DateTime.Now-started).ToString(@"mm\:ss"):
             processing?"正在识别":connected?"准备就绪":"正在连接服务器";

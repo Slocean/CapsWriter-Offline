@@ -65,6 +65,15 @@ class UdpStopAckTests(unittest.TestCase):
         controller._sock = _FakeSock()
         return controller, manager
 
+    def test_state_advertises_capture_handoff_events(self):
+        from types import SimpleNamespace
+        controller, manager = self._controller(recording=True)
+        manager.app = SimpleNamespace(ws=SimpleNamespace(is_connected=True))
+        addr = ('127.0.0.1', 50008)
+        controller._handle_command('STATE', addr)
+        self.assertEqual(controller._sock.sent,
+                         [(b'STATE|recording=1|connected=1|started=0|meter=1|capture=1', addr)])
+
     def test_stop_while_recording_finishes_then_acks(self):
         controller, manager = self._controller(recording=True)
         addr = ('127.0.0.1', 50000)

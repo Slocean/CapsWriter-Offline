@@ -107,6 +107,8 @@ class AudioRecorder:
         从队列中读取音频数据，保存到文件（如果启用），
         并发送到服务端进行识别。
         """
+        session_id = str(uuid.uuid4())
+        lifecycle.info(f"{LIFECYCLE_PREFIX}录音开始 {session_id}")
         try:
             # 生成唯一任务 ID
             self.task_id = str(uuid.uuid1())
@@ -222,7 +224,8 @@ class AudioRecorder:
                         context=Config.context,
                         language=Config.language,
                     )
-                    asyncio.create_task(self._send_message(message))
+                    # 排在已创建的音频发送任务之后，再确认最终提交已完成。
+                    await asyncio.create_task(self._send_message(message))
                     break
 
         except asyncio.CancelledError:
@@ -246,6 +249,8 @@ class AudioRecorder:
 
         except Exception as e:
             logger.error(f"录音任务错误: {e}", exc_info=True)
+        finally:
+            lifecycle.info(f"{LIFECYCLE_PREFIX}录音结束 {session_id}")
     
     async def _send_phrase(self, audio: np.ndarray) -> None:
         """Send one speech phrase as a final task; the server needs no changes."""

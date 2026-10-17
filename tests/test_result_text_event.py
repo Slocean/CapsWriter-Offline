@@ -43,6 +43,8 @@ def test_final_text_event_after_output():
             event = final_events[0]
             assert json.loads(event[1].removeprefix(rp.LIFECYCLE_PREFIX + '文字 ')) == processed
             assert events.index(('output_and_restore', processed)) < events.index(event)
+            completed = ('event', rp.LIFECYCLE_PREFIX + '完成 test')
+            assert events.index(event) < events.index(completed), 'completion must follow processed display text'
             assert '\n' not in event[1], 'embedded newlines must not split the log event'
             events.clear()
             message.is_final = False
@@ -52,6 +54,7 @@ def test_final_text_event_after_output():
             message.text = ' /sil '
             await processor._handle_message(message)
             assert all(not e[1].startswith(rp.LIFECYCLE_PREFIX + '文字 ') for e in events)
+            assert events == [completed], 'empty speech must still finish its task'
             events.clear()
             message.text = '输入失败的结果'
             with mock.patch.object(app.output, 'output', side_effect=RuntimeError('input failed')):
@@ -59,5 +62,11 @@ def test_final_text_event_after_output():
                     await processor._handle_message(message)
             assert any(e[1].startswith(rp.LIFECYCLE_PREFIX + '文字 ') for e in events), \
                 'failed output must still leave selectable final text'
+            assert events[-1] == completed, 'failed output must also end recognition waiting'
+            events.clear()
+            with mock.patch.object(corrector, 'correct', side_effect=ValueError('correction failed')):
+                with pytest.raises(ValueError, match='correction failed'):
+                    await processor._handle_message(message)
+            assert events == [completed], 'processing failure before display cannot leave a pending task'
 
     asyncio.run(run())

@@ -47,11 +47,16 @@ internal static partial class Desktop {
     }
     internal static void CheckResultOptions() {
         LoadUiPrefs();
-        Check(!autoCopy && floatTopmost,"defaults");
+        Check(!autoCopy && floatTopmost && floatCompletionSeconds==1,"defaults include one-second completion");
         BuildMain();BuildFloat();
         var copy=FindSwitch(main,"识别完成后自动复制到剪贴板");
         var pin=FindSwitch(main,"浮窗始终置于最顶层");
         Check(copy!=null && pin!=null,"settings switches exist");
+        Check(completionSlider.Value==1 && completionValue.Text=="1 秒","completion duration setting defaults to one second");
+        completionSlider.Value=2.5;
+        floatCompletionSeconds=1;LoadUiPrefs();
+        Check(floatCompletionSeconds==2.5,"completion duration persists");
+        completionSlider.Value=1;
         Check(transcript.IsReadOnly && transcript.VerticalScrollBarVisibility==ScrollBarVisibility.Auto,"selectable scrolling result");
         Check(floatWindow.Topmost,"default topmost");
         pin.IsChecked=false;
@@ -72,7 +77,15 @@ internal static partial class Desktop {
         // Legacy preference files retain defaults for the two newly added keys.
         File.WriteAllText(UiPrefsPath,"theme=dark\nglass=60\n");
         autoCopy=false;floatTopmost=true;LoadUiPrefs();
-        Check(!autoCopy && floatTopmost && darkTheme && glassStrength==60,"legacy preferences");
+        Check(!autoCopy && floatTopmost && darkTheme && glassStrength==60 && floatCompletionSeconds==1,"legacy preferences retain one-second default");
+        string[] durations={"NaN","Infinity","bad","-1","99","2.5"};
+        double[] expected={1,1,1,.5,10,2.5};
+        for(int i=0;i<durations.Length;i++) {
+            File.WriteAllText(UiPrefsPath,"completion_seconds="+durations[i]+"\n");
+            floatCompletionSeconds=1;LoadUiPrefs();
+            Check(floatCompletionSeconds==expected[i],"invalid completion duration cannot break timer");
+        }
+        floatCompletionSeconds=1;
         copy.IsChecked=false;
         ProcessLine("触发：开始录音");
         ProcessLine(TextEvent("关闭时不复制"));
@@ -124,14 +137,16 @@ internal static partial class Desktop {
         CopyResult(false);
         Check(Clipboard.Writes==writes+1,"empty placeholder never copied");
         CheckWaveform();
-        Console.WriteLine("PASS: full-text copy button, native topmost repair, microphone waveform, floating transcript and preferences");
+        Console.WriteLine("PASS: full-text copy, native topmost, slower waveform, completion style/timer/preferences and lifecycle transitions");
     }
     static void CheckWaveform() {
         Check(waveBars.Count==18 && waveBars[0].Width==2,"thin waveform geometry");
+        waveOffset=0;AdvanceWave(.05,100);
+        Check(waveBars[waveBars.Count-1].Height==2 && Math.Abs(waveOffset-3)<.01,"wave scrolls at 30px per second, half its prior speed");
         AdvanceWave(.05,100);
         double spoken=waveBars[waveBars.Count-1].Height;
         Check(spoken>2,"speech increases waveform height");
-        AdvanceWave(0,100);
+        AdvanceWave(0,100);AdvanceWave(0,100);
         Check(waveBars[waveBars.Count-1].Height==2 && waveBars[waveBars.Count-2].Height==spoken,
             "silent samples return to baseline while speech scrolls left");
         AdvanceWave(1,100);
@@ -155,9 +170,10 @@ internal static partial class Desktop {
         Check(meterSupported,"new backend advertises meter support");
         ApplyStateReply("STATE|recording=1|connected=1|started=1");
         Check(!meterSupported,"old backend does not receive unsupported high-frequency requests");
-        meterReceived=DateTime.UtcNow.AddSeconds(-1);waveFrame=DateTime.UtcNow.AddMilliseconds(-100);
-        AnimateWave();Check(waveBars[waveBars.Count-1].Height==2,"stale audio falls back to silence");
-        CheckFloatStates();
+        meterReceived=DateTime.UtcNow.AddSeconds(-1);
+        for(int i=0;i<2;i++){waveFrame=DateTime.UtcNow.AddMilliseconds(-100);AnimateWave();}
+        Check(waveBars[waveBars.Count-1].Height==2,"stale audio falls back to silence at the slower scroll speed");
+        CheckFloatStates();CheckFloatCompletionTimeline();
         recording=true;connected=true;started=DateTime.Now;
         backend=System.Diagnostics.Process.GetCurrentProcess();
         lastText="这是语音输入的识别文字。\n声波随麦克风音量变化，识别结果显示在下方。";
@@ -181,7 +197,7 @@ internal static partial class Desktop {
         foreach(var bar in waveBars)Check(bar.Height==2,"recording stop resets waveform");
     }
     static void CheckFloatStates() {
-        pendingTasks.Clear();recording=false;floatCompleted=false;floatCancelled=false;
+        pendingTasks.Clear();recording=false;floatCompleted=false;floatCancelled=false;awaitingAudio=false;
         UpdateFloatLayout();
         Check(floatState==FloatState.Idle && floatWindow.Width==56 && floatWindow.Height==56,"idle is a single microphone icon");
         Check(floatStart.Visibility==Visibility.Visible && floatWave.Visibility==Visibility.Collapsed,"idle has no wave or extra controls");
@@ -211,8 +227,19 @@ internal static partial class Desktop {
                     var icon=floatStart.TransformToAncestor(floatOuter).Transform(new Point(22,22));
                     Check(Math.Abs(icon.X-floatWindow.Width/2)<1 && Math.Abs(icon.Y-28)<1,"idle and completion icons stay centered");
                 }
-                if(state==FloatState.Complete)
-                    Check(((System.Windows.Shapes.Path)floatStart.Content).Data.ToString()==FloatGlyph("confirm").Data.ToString(),"completed glyph matches right confirmation check");
+                if(state==FloatState.Complete) {
+                    var done=(System.Windows.Shapes.Path)floatStart.Content;
+                    var confirm=(System.Windows.Shapes.Path)floatRecord.Content;
+                    Check(done.Data.ToString()==confirm.Data.ToString() &&
+                        ((SolidColorBrush)done.Stroke).Color==((SolidColorBrush)confirm.Stroke).Color &&
+                        ((SolidColorBrush)floatStart.Background).Color==((SolidColorBrush)floatRecord.Background).Color &&
+                        floatStart.BorderThickness==floatRecord.BorderThickness && floatStart.BorderThickness.Left==1,
+                        "completion uses the same filled bordered check button in both themes");
+                    var border=(Border)floatStart.Template.FindName("Root",floatStart);
+                    Check(border.CornerRadius.TopLeft==22 && border.BorderThickness.Left==1 &&
+                        ((SolidColorBrush)border.Background).Color==((SolidColorBrush)floatRecord.Background).Color,
+                        "actual rendered completion border has circular fill and outline");
+                }
             }
         }
         Check(colors[0]!=colors[1],"existing light and dark palettes retained");
@@ -244,6 +271,57 @@ internal static partial class Desktop {
         ProcessLine("历史开始 触发：开始录音",true);UpdateFloatLayout();
         Check(floatState==FloatState.Complete,"historical lines cannot change current completion");
         floatCompleted=false;pendingTasks.Clear();
+    }
+    static void PumpDispatcher(int milliseconds) {
+        var frame=new System.Windows.Threading.DispatcherFrame();
+        var stop=new System.Windows.Threading.DispatcherTimer { Interval=TimeSpan.FromMilliseconds(milliseconds) };
+        stop.Tick+=(s,e)=>{stop.Stop();frame.Continue=false;};stop.Start();
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
+    }
+    static void CheckFloatCompletionTimeline() {
+        pendingTasks.Clear();recording=false;floatCompleted=false;floatCancelled=false;awaitingAudio=false;
+        connected=true;backend=System.Diagnostics.Process.GetCurrentProcess();
+        using(tray=new System.Windows.Forms.NotifyIcon()) {
+            ApplyStateReply("STATE|recording=0|connected=1|capture=1");
+            ProcessLine("触发：开始录音");ProcessLine("任务生命周期: 录音开始 session-a");UpdateDisplay();
+            Check(floatState==FloatState.Listening,"recording starts listening");
+            ProcessLine("释放：完成录音");UpdateDisplay();
+            Check(floatState==FloatState.Recognizing,"release-to-submit gap must never flash a microphone");
+            ProcessLine("任务生命周期: 提交 final-a");ProcessLine("任务生命周期: 录音结束 session-a");UpdateDisplay();
+            Check(floatState==FloatState.Recognizing,"submitted audio stays recognizing");
+            ProcessLine("收到最终识别结果: 原始结果, 时延: 0.2s");UpdateDisplay();
+            Check(floatState==FloatState.Recognizing,"raw result does not end postprocessing waiting");
+            ProcessLine(TextEvent("已处理的结果"));UpdateDisplay();
+            Check(floatState==FloatState.Recognizing,"display text waits for its task terminal event");
+            ProcessLine("任务生命周期: 完成 final-a");UpdateDisplay();
+            Check(floatState==FloatState.Complete && floatCompleteTick.IsEnabled && floatCompleteTick.Interval.TotalSeconds==1,
+                "countdown begins only when the completion check appears");
+            PumpDispatcher(200);UpdateDisplay();
+            Check(floatState==FloatState.Complete,"check does not disappear immediately");
+            PumpDispatcher(950);
+            Check(floatState==FloatState.Idle && !floatCompleteTick.IsEnabled && floatWindow.Width==56,
+                "real dispatcher timer restores microphone after the default second without restarting on refresh");
+            Check(((SolidColorBrush)floatStart.Background).Color.A==0,"microphone restores its transparent icon style");
+            ProcessLine("触发：开始录音");ProcessLine("任务生命周期: 录音开始 empty");
+            ProcessLine("释放：完成录音");UpdateDisplay();
+            ProcessLine("任务生命周期: 录音结束 empty");UpdateDisplay();
+            Check(floatState==FloatState.Idle,"empty capture exits recognizing without a false check");
+            completionSlider.Value=2.5;floatCompleted=true;UpdateDisplay();
+            Check(floatCompleteTick.Interval.TotalSeconds==2.5,"selected duration controls the actual completion timer");
+            ProcessLine("触发：开始录音");ProcessLine("任务生命周期: 录音开始 session-new");UpdateDisplay();
+            Check(!floatCompleteTick.IsEnabled,"new recording cancels prior completion timeout");
+            ProcessLine("任务生命周期: 录音结束 session-old");
+            Check(awaitingAudio,"old capture terminal event cannot clear the new capture");
+            PumpDispatcher(1100);
+            Check(floatState==FloatState.Listening,"old timeout cannot overwrite a new recording");
+            ApplyCancelReply("CANCELLED");UpdateDisplay();
+            Check(floatState==FloatState.Idle && !processing,"cancellation clears capture handoff waiting");
+            ApplyStateReply("STATE|recording=0|connected=1");
+            ProcessLine("触发：开始录音");ProcessLine("释放：完成录音");UpdateDisplay();
+            Check(floatState==FloatState.Idle && !processing,"older backend cannot leave capture waiting stuck");
+            completionSlider.Value=1;
+        }
+        backend=null;awaitingAudio=false;floatCancelled=false;
     }
     static void RenderPreview(FrameworkElement element,int width,string path) {
         element.Measure(new Size(width,Double.PositiveInfinity));

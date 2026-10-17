@@ -187,6 +187,14 @@ class ResultProcessor:
             
 
     async def _handle_message(self, message: Optional[RecognitionMessage]) -> None:
+        try:
+            await self._process_message(message)
+        finally:
+            if message is not None and message.is_final:
+                # 最终文字处理、输入及剪贴板恢复结束后才结束等待，异常也有终态。
+                lifecycle.info(f"{LIFECYCLE_PREFIX}完成 {message.task_id}")
+
+    async def _process_message(self, message: Optional[RecognitionMessage]) -> None:
         """处理接收到的消息"""
         if message is None:
             return
@@ -197,16 +205,12 @@ class ResultProcessor:
         original_text = text  # 保存原始识别结果
         if message.is_final and not text and getattr(Config, "pause_segmented", False):
             logger.info("空语音片段未输出文字")
-            # 桌面端状态事件：空结果同样结束对应任务，识别等待据此清除
-            lifecycle.info(f"{LIFECYCLE_PREFIX}完成 {message.task_id}")
             self._live_session = None
             return
         delay = message.time_complete - message.time_submit
 
         if message.is_final:
             logger.info(f"收到最终识别结果: {text}, 时延: {delay:.2f}s")
-            # 桌面端状态事件：该 task_id 的识别等待到此结束（幂等，未知 id 忽略）
-            lifecycle.info(f"{LIFECYCLE_PREFIX}完成 {message.task_id}")
         else:
             logger.debug(
                 f"接收到识别结果，文本: {text[:50]}{'...' if len(text) > 50 else ''}, "

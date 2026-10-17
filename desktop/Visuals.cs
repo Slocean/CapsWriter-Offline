@@ -32,12 +32,13 @@ internal static partial class Desktop {
     static bool autoCopy;
     static bool floatTopmost=true;
     static double glassStrength = 55;
+    static double floatCompletionSeconds = 1;
     static double floatLeft = Double.NaN, floatTop = Double.NaN;
     static string UiPrefsPath { get { return Path.Combine(Dir, "desktop_ui.ini"); } }
     static Button themeButton, floatStart, floatCancel;
-    static TextBlock glassValue;
+    static TextBlock glassValue, completionValue;
     static Border floatOuter;
-    static System.Windows.Threading.DispatcherTimer waveTick;
+    static System.Windows.Threading.DispatcherTimer waveTick, floatCompleteTick;
     static readonly List<Rectangle> waveBars = new List<Rectangle>();
     static UdpClient meterSocket;
     enum FloatState { Idle, Listening, Recognizing, Complete }
@@ -47,7 +48,7 @@ internal static partial class Desktop {
     static DateTime meterReceived, meterRequested, waveFrame;
     static double waveOffset, recognitionPhase;
     static Grid floatWave;
-    static Slider glassSlider;
+    static Slider glassSlider, completionSlider;
     static Button liveModeButton, batchModeButton;
     static TextBlock modeHint;
     static FrameworkElement pauseSetting;
@@ -204,6 +205,9 @@ internal static partial class Desktop {
                     glassStrength=Math.Max(0,Math.Min(100,n));
                 else if (key=="auto_copy") autoCopy=value=="1";
                 else if (key=="float_topmost") floatTopmost=value=="1";
+                else if (key=="completion_seconds" && Double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out n)
+                    && !Double.IsNaN(n) && !Double.IsInfinity(n))
+                    floatCompletionSeconds=Math.Max(.5,Math.Min(10,n));
                 else if (key=="left" && Double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out n))
                     floatLeft=n;
                 else if (key=="top" && Double.TryParse(value,NumberStyles.Float,CultureInfo.InvariantCulture,out n))
@@ -217,17 +221,27 @@ internal static partial class Desktop {
                 "glass="+glassStrength.ToString("F0",CultureInfo.InvariantCulture)+"\n"+
                 "auto_copy="+(autoCopy?"1":"0")+"\n"+
                 "float_topmost="+(floatTopmost?"1":"0")+"\n"+
+                "completion_seconds="+floatCompletionSeconds.ToString("0.0",CultureInfo.InvariantCulture)+"\n"+
                 "left="+floatLeft.ToString("F0",CultureInfo.InvariantCulture)+"\n"+
                 "top="+floatTop.ToString("F0",CultureInfo.InvariantCulture)+"\n";
             File.WriteAllText(UiPrefsPath,data);
         } catch (IOException) {} catch (UnauthorizedAccessException) {}
+    }
+    static void UpdateCompletionSetting() {
+        if(completionValue!=null)completionValue.Text=floatCompletionSeconds.ToString("0.#",CultureInfo.InvariantCulture)+" 秒";
+        if(floatCompleteTick!=null && floatCompleteTick.IsEnabled)
+            floatCompleteTick.Interval=TimeSpan.FromSeconds(floatCompletionSeconds);
     }
     static void UpdateFloatLayout() {
         if(floatWindow==null || floatStart==null)return;
         var next=recording?FloatState.Listening:floatCancelled?FloatState.Idle:
             processing?FloatState.Recognizing:floatCompleted?FloatState.Complete:FloatState.Idle;
         if(next!=floatState) {
-            floatStart.Content=FloatGlyph(next==FloatState.Complete?"confirm":"microphone");
+            SetFloatButtonVisual(floatStart,next==FloatState.Complete?"confirm":"microphone");
+            floatCompleteTick.Stop();
+            if(next==FloatState.Complete){
+                floatCompleteTick.Interval=TimeSpan.FromSeconds(floatCompletionSeconds);floatCompleteTick.Start();
+            }
             waveOffset=0;recognitionPhase=0;waveFrame=DateTime.UtcNow;
             foreach(var bar in waveBars) {
                 bar.Height=2;
@@ -277,17 +291,23 @@ internal static partial class Desktop {
             StrokeEndLineCap=PenLineCap.Round,StrokeLineJoin=PenLineJoin.Round };
     }
     static Button FloatButton(string kind) {
-        bool confirm=kind=="confirm";
-        var button=ThemeButton("",confirm?"#26282B":kind=="cancel"?"#11000000":"#00000000",
-            confirm?"#EDEEEC":kind=="cancel"?"#22FFFFFF":"#00000000","#33363A","#E7E8E6",22);
+        var button=ThemeButton("","#00000000","#00000000","#33363A","#E7E8E6",22);
         button.Width=44;button.Height=44;button.Padding=new Thickness(0);
-        var glyph=FloatGlyph(kind);
-        if(confirm)glyph.Stroke=T("#FFFFFF","#1D1F22");
-        button.Content=glyph;
-        button.ToolTip=kind=="cancel"?"取消录音":confirm?"结束录音并识别":"点击开始录音";
+        SetFloatButtonVisual(button,kind);
+        button.ToolTip=kind=="cancel"?"取消录音":kind=="confirm"?"结束录音并识别":"点击开始录音";
         System.Windows.Automation.AutomationProperties.SetName(button,(string)button.ToolTip);
         ToolTipService.SetShowOnDisabled(button,true);
         return button;
+    }
+    static void SetFloatButtonVisual(Button button,string kind) {
+        bool confirm=kind=="confirm";
+        button.Background=T(confirm?"#26282B":kind=="cancel"?"#11000000":"#00000000",
+            confirm?"#EDEEEC":kind=="cancel"?"#22FFFFFF":"#00000000");
+        button.BorderBrush=confirm?T("#26282B","#EDEEEC"):Brushes.Transparent;
+        button.BorderThickness=new Thickness(confirm?1:0);
+        var glyph=FloatGlyph(kind);
+        if(confirm)glyph.Stroke=T("#FFFFFF","#1D1F22");
+        button.Content=glyph;
     }
     static Grid WaveBars(int count) {
         var row=new StackPanel { Orientation=Orientation.Horizontal,
@@ -330,7 +350,7 @@ internal static partial class Desktop {
         } catch(SocketException) { audioLevel=0; }
     }
     static void AdvanceWave(double level, double elapsedMs) {
-        waveOffset+=Math.Max(0,Math.Min(100,elapsedMs))*.06;
+        waveOffset+=Math.Max(0,Math.Min(100,elapsedMs))*.03;
         while(waveOffset>=5) {
             for(int i=0;i<waveBars.Count-1;i++)waveBars[i].Height=waveBars[i+1].Height;
             if(waveBars.Count>0)
@@ -350,7 +370,7 @@ internal static partial class Desktop {
             ReadAudioMeter();
             AdvanceWave((now-meterReceived).TotalMilliseconds<250?audioLevel:0,elapsed);
         } else if(floatState==FloatState.Recognizing) {
-            recognitionPhase+=Math.Max(0,Math.Min(100,elapsed))*.006;
+            recognitionPhase+=Math.Max(0,Math.Min(100,elapsed))*.003;
             for(int i=0;i<waveBars.Count;i++) {
                 waveBars[i].Height=4+22*(1-i/18.0)*(.55+.45*Math.Pow(Math.Sin(recognitionPhase-i*.24),2));
                 waveBars[i].Opacity=1;

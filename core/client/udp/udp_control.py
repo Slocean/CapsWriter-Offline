@@ -148,7 +148,7 @@ class UDPController:
             # started 为录音开始的 Unix 秒时间戳（未录音为 0）。
             ws = getattr(self.manager.app, 'ws', None)
             ws_connected = bool(getattr(ws, 'is_connected', False))
-            self._reply(addr, ("STATE|recording=%d|connected=%d|started=%d|meter=1"
+            self._reply(addr, ("STATE|recording=%d|connected=%d|started=%d|meter=1|capture=1"
                                % (1 if state.recording else 0,
                                   1 if ws_connected else 0,
                                   int(getattr(state, 'recording_start_time', 0.0) or 0))
