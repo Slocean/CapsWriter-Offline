@@ -16,6 +16,7 @@ from config_server import ServerConfig as Config
 from .ws_recv import ws_recv
 from .ws_send import ws_send
 from .control_server import start_control_server
+from core.tools.gateway_endpoint import publish
 from .. import logger # Server module logger
 
 _REJECT_HEADERS = Headers([('Content-Type', 'text/plain; charset=utf-8'),
@@ -70,7 +71,7 @@ class SocketManager:
         if self._is_running: return
 
         # 0. 启动前自检环境
-        if not self._check_port():
+        if self.app.listener is None and not self._check_port():
             input("\n按回车键退出...")
             return
 
@@ -94,8 +95,8 @@ class SocketManager:
 
         async with websockets.serve(
             handler,
-            Config.addr,
-            Config.port,
+            sock=self.app.listener,
+            **({} if self.app.listener is not None else {'host': Config.addr, 'port': Config.port}),
             subprotocols=["binary"],
             max_size=Config.ws_max_message_size,
             max_queue=Config.ws_max_queue,
@@ -103,12 +104,19 @@ class SocketManager:
         ) as server:
             self._server = server  # 保存 server 引用，用于外部关闭
 
-            # 3.1 控制通道（管理进程专用，失败不影响主服务）
-            self._control_server = await start_control_server(self.app)
+            publisher = asyncio.create_task(publish(
+                self.app.base_dir / 'gateway-endpoint' / 'routes.txt',
+                Config.addr, Config.port, logger))
+            try:
+                # 3.1 控制通道（管理进程专用，失败不影响主服务）
+                self._control_server = await start_control_server(self.app)
 
-            # 4. 进入识别结果发送循环 (作为主阻塞任务)
-            logger.info("WebSocket 发送协程已就绪")
-            await ws_send(self.app)
+                # 4. 进入识别结果发送循环 (作为主阻塞任务)
+                logger.info("WebSocket 发送协程已就绪")
+                await ws_send(self.app)
+            finally:
+                publisher.cancel()
+                await asyncio.gather(publisher, return_exceptions=True)
 
         self._is_running = False
         logger.info("SocketManager: WebSocket 服务已退出")

@@ -40,10 +40,12 @@ echo "--- 桥内预检（直连假上游）:"
 docker run --rm --network docker_proxy python:3-alpine \
   wget -qO- -T 3 "http://$UP_IP:18999/" | head -c 120; echo
 
-docker build -q --build-arg UPSTREAM="$UP_IP:18999" --build-arg LISTEN=8111 \
+printf '%s:18999\r\n' "$UP_IP" > "$PWD/gw/routes.txt"
+docker build -q --build-arg ENDPOINT_ROLE=asr --build-arg LISTEN=8111 \
   -t vgw-hdr gw >/dev/null
-docker run -d --rm --name vgw-hdr --network docker_proxy vgw-hdr >/dev/null
-sleep 2
+docker run -d --rm --name vgw-hdr --network docker_proxy \
+  -v "$PWD/gw:/capswriter-endpoint:ro" vgw-hdr >/dev/null
+sleep 5
 
 GW_IP=$(docker inspect vgw-hdr --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' | head -1)
 echo "--- 经网关转发（带 X-API-Key 与机器门注入头）:"

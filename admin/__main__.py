@@ -12,8 +12,11 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import getpass
+import logging
 import sys
+import threading
 
 from .config_admin import AdminConfig as Cfg, load_overrides
 
@@ -61,6 +64,10 @@ def main(argv=None) -> int:
 
     app = AdminApp()
     server = make_server(Cfg.host, Cfg.port, app)
+    from core.tools.gateway_endpoint import publish
+    threading.Thread(target=lambda: asyncio.run(publish(
+        Cfg.asr_work_dir / 'gateway-endpoint' / 'admin-routes.txt',
+        Cfg.host, Cfg.port, logging.getLogger(__name__))), daemon=True).start()
     launch = app.asr._launch_command()
     print(f'CapsWriter 管理进程已启动: http://{Cfg.host}:{Cfg.port}/')
     print(f'  数据目录: {Cfg.data_dir}')

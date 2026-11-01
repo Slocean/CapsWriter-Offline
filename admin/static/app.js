@@ -18,6 +18,7 @@
   var logCursor = 0;
   var pollTimer = null;
   var hotwordsMtime = null;
+  var portOwners = {};
   var theme = localStorage.getItem('cw-theme') || 'light';
 
   // ---------- 基础 ----------
@@ -235,6 +236,10 @@
     // 已安全停止的新版必须允许启动；旧版（不可核身）保持全部禁用，
     // 避免误报“已停止”或拉起第二个模型
     $('startBtn').disabled = !asr.can_start;
+    $('portConflict').classList.toggle('hidden', !asr.can_resolve_port);
+    portOwners = asr.port_owners || {};
+    $('portAutoBtn').disabled = !asr.can_auto_resolve;
+    $('portStopBtn').disabled = Object.keys(portOwners).length === 0;
     $('stopBtn').disabled = !asr.can_stop || state === 'stopped';
     $('restartBtn').disabled = !asr.can_restart || state === 'stopped';
   }
@@ -259,12 +264,19 @@
     });
   });
   $('startBtn').addEventListener('click', function () { submitAction('start'); });
+  $('portAutoBtn').addEventListener('click', function () { submitAction('start', 'auto'); });
+  $('portStopBtn').addEventListener('click', function () {
+    var list = Object.keys(portOwners).map(function (pid) { return 'PID ' + pid + '：' + portOwners[pid][1]; }).join('\n');
+    if (window.confirm('将关闭以下占用端口的进程：\n' + list + '\n确定继续？')) submitAction('start', 'stop');
+  });
   $('stopBtn').addEventListener('click', function () {
     if (window.confirm('确定停止识别服务？所有客户端将断开连接。')) submitAction('stop');
   });
 
-  function submitAction(kind) {
-    api('POST', '/api/v1/actions/' + kind, {})
+  function submitAction(kind, portConflict) {
+    var body = portConflict ? {port_conflict: portConflict} : {};
+    if (portConflict === 'stop') body.port_owners = portOwners;
+    api('POST', '/api/v1/actions/' + kind, body)
       .then(function () {
         $('actionProgress').textContent = '已提交，等待执行…';
         $('actionProgress').classList.remove('hidden');

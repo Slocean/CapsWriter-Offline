@@ -30,21 +30,24 @@ from config_server import ServerConfig as ServerConfigClass
 from . import audit, logsource
 from .asr_control import ASRControl
 from .config_admin import AdminConfig as Cfg
+from .control_client import ControlClient  # noqa: F401 供测试打桩引用路径稳定
 from .hotwords_store import read_hotwords, write_hotwords
 from .httpd import HTTPError, Request, Response, Router
+from .model_manager import ModelManager, ModelOpError
 from .sessions import AdminAuth
-from .settings_store import SETTINGS_SCHEMA, load_settings, save_settings
+from .settings_store import SETTINGS_SCHEMA, load_settings, save_settings, validate_settings
 
 SESSION_COOKIE = 'cw_admin_session'
 CSRF_COOKIE = 'cw_admin_csrf'
 
 
 class AdminApp:
-    def __init__(self):
+    def __init__(self, model_manager: Optional[ModelManager] = None):
         self.router = Router()
         self.mode = Cfg.admin_auth_mode if Cfg.admin_auth_mode in ('password', 'gateway') else 'password'
         self.auth = AdminAuth() if self.mode == 'password' else None
         self.asr = ASRControl()
+        self.models = model_manager or ModelManager(asr=self.asr)
         self.started_at = time.time()
         self._register_routes()
 
@@ -147,6 +150,12 @@ class AdminApp:
         r.add('POST', r'/api/v1/actions/(?P<kind>start|stop|restart)', self.post_action, auth=True, csrf=True)
         r.add('GET', r'/api/v1/actions/current', self.current_action, auth=True)
 
+        # 语音模型管理（下载/删除）
+        r.add('GET', r'/api/v1/models', self.get_models, auth=True)
+        r.add('POST', r'/api/v1/models/download', self.post_model_download, auth=True, csrf=True)
+        r.add('POST', r'/api/v1/models/task/cancel', self.post_model_cancel, auth=True, csrf=True)
+        r.add('POST', r'/api/v1/models/delete', self.post_model_delete, auth=True, csrf=True)
+
         r.add('GET', r'/', self.index)
         r.add('GET', r'/static/(?P<name>[A-Za-z0-9._\-]+)', self.static_file)
 
@@ -172,8 +181,13 @@ class AdminApp:
             return Response.json({'ok': True, 'mode': 'gateway', 'authenticated': True, 'csrf': csrf},
                                  headers=headers)
         token = request.cookies().get(SESSION_COOKIE, '')
-        authenticated = bool(self.auth and self.auth.session(token))
-        return Response.json({'ok': True, 'mode': 'password', 'authenticated': authenticated})
+        session = self.auth.session(token) if self.auth else None
+        data = {'ok': True, 'mode': 'password', 'authenticated': bool(session)}
+        # R13：恢复已有会话时一并返回该会话的 CSRF——否则页面刷新后 csrf 为空，
+        # 热词/设置/启停等写操作会被 CSRF 校验拒绝
+        if session:
+            data['csrf'] = session.get('csrf', '')
+        return Response.json(data)
 
     def login(self, request: Request) -> Response:
         ip = request.remote_ip
@@ -232,13 +246,35 @@ class AdminApp:
 
     def put_settings(self, request: Request) -> Response:
         data = request.json()
-        ok, err = save_settings(data)
+        # 先完整校验（不落盘），模型切换只允许完整安装的目标模型
+        cleaned, err = validate_settings(data)
+        if err:
+            audit.record('settings.save', request.remote_ip, ok=False, detail=err)
+            raise HTTPError(422, err)
+        if 'model_type' in cleaned:
+            ok, why = self.models.check_switchable(str(cleaned['model_type']))
+            if not ok:
+                audit.record('settings.save', request.remote_ip, ok=False, detail=why)
+                raise HTTPError(422, why)
+        ok, err = save_settings(cleaned)
         if not ok:
             audit.record('settings.save', request.remote_ip, ok=False, detail=err)
             raise HTTPError(422, err)
         audit.record('settings.save', request.remote_ip, detail=','.join(sorted(data.keys())))
         restart_needed = [k for k in data.keys() if SETTINGS_SCHEMA.get(k, {}).get('restart')]
-        return Response.json({'ok': True, 'restart_required': restart_needed})
+        # R12/A05：log_level 经控制通道即时应用到识别主进程（logger+文件
+        # handler 同步更新）；模型 worker 是独立进程，重启后才同步——
+        # 生效范围必须如实说明，不能宣称全部立即生效
+        notice = ''
+        if 'log_level' in data:
+            applied, detail = self.asr.apply_log_level(str(data['log_level']))
+            if not applied:
+                restart_needed.append('log_level')
+                audit.record('settings.log_level', request.remote_ip, ok=False, detail=detail)
+            else:
+                notice = ('日志级别已即时应用到识别主进程（含日志文件）；'
+                          '模型 worker 子进程在识别进程重启后同步。')
+        return Response.json({'ok': True, 'restart_required': restart_needed, 'notice': notice})
 
     # ---------------- 热词 ----------------
 
@@ -273,8 +309,24 @@ class AdminApp:
     def post_action(self, request: Request) -> Response:
         kind = request.params['kind']
         data = request.json()
-        result = self.asr.submit(kind, force=bool(data.get('force')))
+        # 启动与模型安装互斥：下载任务进行中 / 所选模型不完整时拒绝启动
+        # （服务端能力校验，前端禁用只是第一道门）
+        if kind == 'start':
+            ok, why = self.models.check_start_allowed()
+            if not ok:
+                audit.record('action.start', request.remote_ip, ok=False, detail=why[:200])
+                raise HTTPError(403, why)
+        port_conflict = data.get('port_conflict', '')
+        if not isinstance(port_conflict, str):
+            raise HTTPError(422, '无效的端口冲突处理方式')
+        result = self.asr.submit(kind, force=bool(data.get('force')), port_conflict=port_conflict,
+                                 port_owners=data.get('port_owners'))
         if not result.get('ok'):
+            if result.get('error') == 'not_allowed':
+                # R03：服务端能力校验未通过（旧版不可核身/启动配置无效等）
+                audit.record(f'action.{kind}', request.remote_ip, ok=False,
+                             detail=str(result.get('detail') or '')[:200])
+                raise HTTPError(403, result.get('detail') or '当前状态不允许该操作')
             audit.record(f'action.{kind}', request.remote_ip, ok=False, detail='conflict')
             raise HTTPError(409, '已有操作正在进行中')
         audit.record(f'action.{kind}', request.remote_ip, detail=f"action={result['action']['id']} force={bool(data.get('force'))}")
@@ -282,6 +334,43 @@ class AdminApp:
 
     def current_action(self, request: Request) -> Response:
         return Response.json({'ok': True, 'action': self.asr.current_action()})
+
+    # ---------------- 语音模型管理 ----------------
+
+    def get_models(self, request: Request) -> Response:
+        return Response.json(self.models.status_payload())
+
+    def post_model_download(self, request: Request) -> Response:
+        data = request.json()
+        key = str(data.get('model') or '')
+        try:
+            result = self.models.start_download(key, ip=request.remote_ip)
+        except ModelOpError as e:
+            raise HTTPError(422, str(e))
+        if not result.get('ok'):
+            code = 409 if result.get('error') == 'conflict' else 403
+            raise HTTPError(code, result.get('detail') or '无法开始下载')
+        return Response.json({'ok': True, 'task': result['task']})
+
+    def post_model_cancel(self, request: Request) -> Response:
+        result = self.models.cancel_download(ip=request.remote_ip)
+        if not result.get('ok'):
+            raise HTTPError(409, result.get('detail') or '当前没有进行中的下载任务')
+        return Response.json({'ok': True, 'task': result['task']})
+
+    def post_model_delete(self, request: Request) -> Response:
+        data = request.json()
+        key = str(data.get('model') or '')
+        if data.get('confirm') is not True:
+            raise HTTPError(422, '删除模型必须显式 confirm=true')
+        try:
+            result = self.models.delete_model(key, ip=request.remote_ip)
+        except ModelOpError as e:
+            raise HTTPError(422, str(e))
+        if not result.get('ok'):
+            code = 409 if result.get('error') == 'conflict' else 403
+            raise HTTPError(code, result.get('detail') or '无法删除该模型')
+        return Response.json({'ok': True, 'deleted': result['deleted'], 'note': result.get('note', '')})
 
     # ---------------- 静态页面 ----------------
 

@@ -12,6 +12,12 @@ from pathlib import Path
 
 REPO_DIR = Path(__file__).parents[1]
 
+# R10：这些键在类属性里都是 Path；JSON 覆盖进来的是 str，运行时若仍是 str，
+# 调用方的 .stat/.read_text/.parent 会 AttributeError。覆盖后统一转 Path。
+_PATH_KEYS = ('repo_dir', 'data_dir', 'static_dir', 'asr_work_dir', 'asr_entry',
+              'asr_pid_file', 'asr_control_token_path', 'settings_file',
+              'hotwords_path', 'log_file', 'password_file', 'audit_log')
+
 
 class AdminConfig:
     # 监听地址：默认绑定全部接口，供 WSL/网关访问；请用 Windows 防火墙
@@ -89,6 +95,19 @@ def load_overrides(path: Path | str | None = None) -> None:
             continue
         setattr(AdminConfig, key, value)
 
+    # R10：asr_launch_cmd 必须是字符串数组（subprocess.Popen 的 argv）。
+    # 单字符串按单元素命令接受；其余类型提示后忽略，保持默认（源码运行）。
+    if 'asr_launch_cmd' in data:
+        cmd = AdminConfig.asr_launch_cmd
+        if isinstance(cmd, str):
+            AdminConfig.asr_launch_cmd = [cmd]
+        elif isinstance(cmd, (list, tuple)):
+            AdminConfig.asr_launch_cmd = [str(c) for c in cmd]
+        else:
+            print('admin_settings.json 的 asr_launch_cmd 必须是字符串数组；'
+                  '已忽略该覆盖', file=sys.stderr)
+            AdminConfig.asr_launch_cmd = []
+
     work_dir = Path(AdminConfig.asr_work_dir)
     if str(work_dir) != str(REPO_DIR):
         derived = {
@@ -102,3 +121,18 @@ def load_overrides(path: Path | str | None = None) -> None:
         for key, value in derived.items():
             if key not in data:
                 setattr(AdminConfig, key, value)
+
+    # R10：全部路径字段统一转 Path（含显式覆盖与派生值），调用方可以放心
+    # 使用 .stat/.read_text/.parent；坏路径在这里显式失败而不是运行中吞异常
+    # 便携包（阶段八）：admin_settings.json 里的相对路径按 REPO_DIR（管理端
+    # 所在包根）解析，不得依赖进程 cwd——管理端从任意 cwd 启动、目录带
+    # 空格时同样正确；绝对路径原样保留
+    for key in _PATH_KEYS:
+        value = getattr(AdminConfig, key, None)
+        if value is None:
+            continue
+        if not isinstance(value, Path):
+            value = Path(str(value))
+        if not value.is_absolute():
+            value = REPO_DIR / value
+        setattr(AdminConfig, key, value)

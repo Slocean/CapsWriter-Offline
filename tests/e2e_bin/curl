@@ -1,18 +1,30 @@
 #!/usr/bin/env bash
-# e2e 夹具：假 curl。拦截 voice-setup.sh 的全部 HTTP 调用：
-#  - http://<panel-ip>:8000/api/*  → 场景表响应，调用记录到 VOICE_E2E_CALLLOG
-#  - http://127.0.0.1/（Caddy 回环探测）→ 按场景返回状态码
-# 真实 curl 的 -f 语义：HTTP >= 400 时退出码 22。
+# e2e 夹具：假 curl。拦截 voice-setup.sh 的全部 HTTP 调用并强制网络隔离（R11）：
+#  - http://<panel-ip>:8000/api/*  → 场景表响应；**所有 /api/* 请求（含 GET）
+#    必须携带场景规定的 X-API-Key，否则按面板真实行为返回 401/exit 22（R01）；
+#  - http://127.0.0.1/（Caddy 回环探测）→ 按场景返回状态码与重定向 Location；
+#  - 其他任何 URL → 立即失败（exit 3），不允许任何白名单外的网络访问。
+# 真实 curl 的 -f 语义：HTTP >= 400 时退出码 22；-w 输出按格式串渲染。
 SCEN="${VOICE_E2E_SCENARIO:?}"
 CALLLOG="${VOICE_E2E_CALLLOG:?}"
 
 method="GET"
 body=""
 url=""
-has_w=0
+wfmt=""
 host=""
 apikey=""
 me_probe_ip=""
+auth_source=""   # 阶段九：记录 Key 来源（argv|stdin）——产品脚本必须用 stdin
+
+# -H @-：真实 curl 从 stdin 按行读头（≥7.55）；夹具同语义，读取后与
+# argv 头合并扫描。仅当参数里出现 @- 才读 stdin（不抢后续 heredoc）。
+for a in "$@"; do
+  if [ "$a" = "@-" ]; then
+    STDIN_HDRS="$(cat 2>/dev/null || true)"
+    break
+  fi
+done
 
 # 第一遍：完整扫描原始参数（不消耗）
 prev=""
@@ -20,49 +32,77 @@ for a in "$@"; do
   case "$prev" in
     -X) method="$a" ;;
     -d) body="$a" ;;
-    -w) has_w=1 ;;
+    -w) wfmt="$a" ;;
   esac
   case "$a" in
     http://*) [ -z "$url" ] && url="$a" ;;
     Host:*) host="${a#Host: }" ;;
-    X-API-Key:*) apikey="${a#X-API-Key: }" ;;
+    X-API-Key:*) apikey="${a#X-API-Key: }"; auth_source="argv" ;;
   esac
   prev="$a"
 done
 
-record() { # method path body-json
-  printf '{"kind":"api","method":"%s","path":"%s","body":%s}\n' "$1" "$2" "$3" >> "$CALLLOG" 2>/dev/null || true
+# stdin 头合并扫描（-H @-：头来自 stdin，Key 不经 argv）
+if [ -n "${STDIN_HDRS:-}" ]; then
+  while IFS= read -r hline; do
+    case "$hline" in
+      X-API-Key:*) apikey="${hline#X-API-Key: }"; auth_source="stdin" ;;
+      Host:*) host="${hline#Host: }" ;;
+    esac
+  done <<EOF
+$STDIN_HDRS
+EOF
+fi
+
+record() { # method path body-json auth
+  printf '{"kind":"api","method":"%s","path":"%s","body":%s,"auth":%s,"auth_source":"%s"}\n' \
+    "$1" "$2" "$3" "$4" "$auth_source" >> "$CALLLOG" 2>/dev/null || true
 }
 
-valid_ip=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("valid_ip",""))' "$SCEN")
-me_status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("me_status",200))' "$SCEN")
-
-# ---- Caddy 回环探测 ----
+# ---- Caddy 回环探测（无 Key 探测不带认证头；带 Key 探测模拟网关转发）----
 case "$url" in
-  http://127.0.0.1/*|http://127.0.0.1/*)
-    python3 - "$SCEN" "$host" "$apikey" <<'PY'
-import json, sys
+  http://127.0.0.1/*)
+    python3 - "$SCEN" "$host" "$apikey" "$wfmt" <<'PY'
+import json, os, sys, pathlib
 scen = json.load(open(sys.argv[1], encoding='utf-8'))
-host = sys.argv[2]
-apikey = sys.argv[3]
+host, apikey, wfmt = sys.argv[2], sys.argv[3], sys.argv[4]
+# Caddy 视图 = 场景流水线 + 脚本已 POST 保存的流水线（面板保存后即渲染路由，
+# 先于部署生效——这就是「先门后代理」：首次部署前机器门已经在拦）
+try:
+    state = json.loads((pathlib.Path(os.environ.get('VOICE_E2E_STATE', '.'))
+                        / 'panel-state.json').read_text(encoding='utf-8'))
+except Exception:
+    state = {}
+pipes = {p['id']: p for p in (scen.get('pipelines') or [])}
+for pid, p in (state.get('pipelines') or {}).items():
+    base = dict(pipes.get(pid) or {})
+    base.update(p)
+    pipes[pid] = base
 caddy = scen.get("caddy") or {}
 voice, admin = "", ""
-for p in scen.get("pipelines") or []:
+for p in pipes.values():
     if p["id"] == "voice-asr-prod":
-        voice = p["domain"]
+        voice = p.get("domain") or (p.get("domains") or [""])[0]
     elif p["id"] == "voice-admin-prod":
-        admin = p["domain"]
+        admin = p.get("domain") or (p.get("domains") or [""])[0]
+code, location = "", ""
 if host == admin:
-    print(caddy.get("admin_noauth", 302))
+    code = str(caddy.get("admin_noauth", 302))
+    location = str(caddy.get("admin_location", ""))
 elif host == voice and host:
     if not apikey:
-        print(caddy.get("voice_nokey", 401))
+        code = str(caddy.get("voice_nokey", 401))
     elif scen.get("deploy_result") != "success" or not scen.get("containers_running"):
-        print(caddy.get("voice_withkey_pre", 502))
+        code = str(caddy.get("voice_withkey_pre", 502))
     else:
-        print(caddy.get("voice_withkey", 426))
+        code = str(caddy.get("voice_withkey", 426))
 else:
-    print(404)
+    code = "404"
+# 渲染 -w 格式串：只支持本脚本用到的 %{http_code} / %{redirect_url} / \n
+out = (wfmt or "%{http_code}").replace("%{http_code}", code)
+out = out.replace("%{redirect_url}", location)
+out = out.replace("\\n", "\n").replace("\\r", "")
+sys.stdout.write(out if out.endswith("\n") else out + "\n")
 PY
     exit 0
     ;;
@@ -70,7 +110,7 @@ esac
 
 [ -n "$url" ] || { echo "fake curl: no url" >&2; exit 2; }
 
-# ---- 面板 API ----
+# ---- 网络隔离（R11）：只放行面板 API，其余一律失败 ----
 hostport="${url#http://}"
 hostport="${hostport%%/*}"
 host="${hostport%%:*}"
@@ -78,13 +118,34 @@ rest="${url#*${hostport}}"
 path="/${rest#/}"
 path="${path%%\?*}"
 
+if [ "${hostport#*:}" != "${hostport%%:*}" ]; then
+  port="${hostport#*:}"; port="${port%%/*}"
+else
+  port="80"
+fi
+if [ "$port" != "8000" ] || [ "${path#/api}" = "$path" ]; then
+  echo "fake curl: 拒绝非白名单网络访问: $url" >&2
+  exit 3
+fi
+
+valid_ip=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("valid_ip",""))' "$SCEN")
+me_status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("me_status",200))' "$SCEN")
+panel_key=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("panel_key","dpk-test-key-000000"))' "$SCEN")
+
 if [ "$path" = "/api/me" ]; then
-  if [ "$host" != "$valid_ip" ] || [ "$me_status" != "200" ]; then
+  if [ "$host" != "$valid_ip" ] || [ "$me_status" != "200" ] || [ "$apikey" != "$panel_key" ]; then
     exit 7
   fi
-  printf '{"kind":"api","method":"GET","path":"/api/me","body":null}\n' >> "$CALLLOG"
+  printf '{"kind":"api","method":"GET","path":"/api/me","body":null,"auth":%s,"auth_source":"%s"}\n' \
+    "$([ "$apikey" = "$panel_key" ] && echo true || echo false)" "$auth_source" >> "$CALLLOG" 2>/dev/null || true
   echo '{"ok": true}'
   exit 0
+fi
+
+# ---- R01：面板全部 /api/* 要求认证（读取也一样，require_user 不区分方法）----
+if [ "$apikey" != "$panel_key" ] || [ -z "$apikey" ]; then
+  echo "fake curl: 401 Unauthorized: $method $path 未携带有效 X-API-Key" >&2
+  exit 22
 fi
 
 if [ "$host" != "$valid_ip" ]; then
@@ -96,14 +157,13 @@ try:
     print(json.dumps(json.load(sys.stdin), ensure_ascii=False))
 except Exception:
     print("null")')
-printf '{"kind":"api","method":"%s","path":"%s","body":%s}\n' "$method" "$path" "$body_json" >> "$CALLLOG"
+record "$method" "$path" "$body_json" true
 
-python3 - "$SCEN" "$method" "$path" "$body" "$has_w" <<'PY'
+python3 - "$SCEN" "$method" "$path" "$body" <<'PY'
 import json, os, sys, pathlib
 
-scen_path, method, path, body, has_w = sys.argv[1:6]
+scen_path, method, path, body = sys.argv[1:5]
 scen = json.load(open(scen_path, encoding='utf-8'))
-has_w = has_w == "1"
 tmp = pathlib.Path(os.environ.get('VOICE_E2E_STATE', '.'))
 tmp.mkdir(parents=True, exist_ok=True)
 state_path = tmp / 'panel-state.json'
@@ -115,11 +175,16 @@ except Exception:
 def save_state():
     state_path.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
 
+UPLOAD_VERSION = '20260929-160000'
+
 def pipelines_now():
-    """scenario 流水线 + POST /api/pipelines 的状态覆盖"""
+    """scenario 流水线 + POST /api/pipelines / deploy 的状态覆盖（R11 契约）：
+    latest=最新上传目录（upload 后即更新），current=已部署版本（deploy 成功才更新）"""
     pipes = {p['id']: dict(p) for p in (scen.get('pipelines') or [])}
     for pid, p in (state.get('pipelines') or {}).items():
-        pipes[pid] = p
+        base = dict(pipes.get(pid) or {})
+        base.update(p)
+        pipes[pid] = base
     return [pipes[k] for k in sorted(pipes)]
 
 def gate_now():
@@ -151,9 +216,12 @@ if method == "POST" and path == "/api/pipelines":
         "note": body_json.get("note", ""),
         "domain": ".".join([body_json["domains"][0]["sub"], body_json["domains"][0]["root"]]),
         "domains": [".".join([d["sub"], d["root"]]) for d in body_json.get("domains", [])],
-        "latest": "20260929-160000",
+        "latest": None, "current": None,
         "apikey_gate": body_json.get("apikey_gate") or {"enabled": False, "paths": []},
     }
+    prev = (state.get('pipelines') or {}).get(pid) or {}
+    entry['latest'] = prev.get('latest')
+    entry['current'] = prev.get('current')
     state.setdefault('pipelines', {})[pid] = entry
     save_state()
     respond(200, {"ok": True, "id": pid, "renamed_from": None, "migrated": [],
@@ -169,10 +237,36 @@ if method == "POST" and path == "/api/gate":
     respond(200, {"ok": True, "warnings": []}, "gate_warnings")
 
 if method == "POST" and path.endswith("/upload"):
-    respond(200, {"ok": True, "version": "20260929-160000"})
+    pid = path.split('/')[-2]
+    pipes = state.setdefault('pipelines', {})
+    prev = pipes.get(pid) or {}
+    prev['latest'] = UPLOAD_VERSION
+    pipes[pid] = prev
+    save_state()
+    respond(200, {"ok": True, "version": UPLOAD_VERSION})
 
 if method == "POST" and path.endswith("/deploy"):
-    respond(200, {"ok": True, "job": "job-1"})
+    pid = path.split('/')[-2]
+    pipes = state.setdefault('pipelines', {})
+    prev = pipes.get(pid) or {}
+    ver = prev.get('latest') or UPLOAD_VERSION
+    result = scen.get("deploy_result") or "success"
+    # 契约（R02）：latest 在 upload 时更新，current 只在部署真正完成时更新；
+    # no_current_update 模拟「日志成功但 current 没写」；
+    # stale_current_version 模拟 current 停在旧版本（旧容器仍在运行）。
+    if result in ("success", "caddy_reload_failed"):
+        if result == "caddy_reload_failed":
+            if 'stale_current_version' in scen:
+                prev['current'] = scen['stale_current_version']
+        elif not scen.get('no_current_update'):
+            prev['current'] = ver
+        elif 'stale_current_version' in scen:
+            prev['current'] = scen['stale_current_version']
+    pipes[pid] = prev
+    jobs = state.setdefault('jobs', {})
+    jobs[pid] = {'count': 0, 'result': result}
+    save_state()
+    respond(200, {"ok": True, "job": f"job-{pid}"})
 
 if method == "GET" and path.startswith("/api/pipelines"):
     respond(200, pipelines_now())
@@ -181,16 +275,29 @@ if method == "GET" and path == "/api/gate":
     respond(200, gate_now())
 
 if method == "GET" and path.startswith("/api/logs/"):
-    counter = tmp / 'polls'
-    n = int(counter.read_text()) if counter.exists() else 0
-    counter.write_text(str(n + 1))
-    result = scen.get("deploy_result") or "success"
+    job = path.split('/')[-1]
+    pid = job[len('job-'):] if job.startswith('job-') else ''
+    job_state = (state.get('jobs') or {}).get(pid) or {'count': 0, 'result': 'success'}
+    job_state['count'] = job_state.get('count', 0) + 1
+    state.setdefault('jobs', {})[pid] = job_state
+    save_state()
+    n, result = job_state['count'], job_state.get('result') or 'success'
     if result == "timeout":
         print(json.dumps({"text": "正在构建… 第 %d 次轮询" % n, "size": 10, "done": False}))
         sys.exit(0)
     if result == "failed":
         done = n >= 2
-        text = "构建中…\n" if not done else "!!!!! 失败：镜像构建失败\n"
+        text = "构建中…\n" if not done else "!!!!! 失败：镜像构建失败 X-API-Key: dpk-fake-secret-123456 泄漏检查\n"
+        print(json.dumps({"text": text, "size": len(text), "done": done}))
+        sys.exit(0)
+    if result == "caddy_reload_failed":
+        # 面板真实契约：Caddy 重载失败后仍写成功标记（deploy_service.py:119-122）
+        done = n >= 2
+        text = ("构建中…\n" if not done else
+                "⚠️  部署本身完成了，但 Caddy 重载失败：exit 1\n"
+                "   路由可能没更新。手动执行：\n"
+                "   docker exec caddy caddy reload --config /etc/caddy/Caddyfile\n"
+                "===== deploy 成功 =====\n")
         print(json.dumps({"text": text, "size": len(text), "done": done}))
         sys.exit(0)
     done = n >= 2

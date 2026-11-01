@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # e2e 夹具：假 docker。行为由 VOICE_E2E_SCENARIO 场景文件驱动。
+# ps 按 --format 参数区分三种调用（Names / Names+Status / Names+Image）；
+# Image 列按面板契约输出 app-<pid>:<current>（current 才是已部署镜像标签）。
 SCEN="${VOICE_E2E_SCENARIO:?}"
 case "$1" in
   inspect)
@@ -11,13 +13,29 @@ print("\n".join(scen.get("panel_ips") or []))
 PY
     ;;
   ps)
-    # docker ps --format '{{.Names}} {{.Status}}'
-    python3 - "$SCEN" <<'PY'
-import json, sys
+    fmt="${3:-}"
+    python3 - "$SCEN" "$fmt" <<'PY'
+import json, os, sys, pathlib
 scen = json.load(open(sys.argv[1], encoding='utf-8'))
-if scen.get("containers_running"):
-    for pid in ("voice-asr-prod", "voice-admin-prod"):
+fmt = sys.argv[2] or ""
+if not scen.get("containers_running"):
+    sys.exit(0)
+tmp = pathlib.Path(os.environ.get('VOICE_E2E_STATE', '.'))
+try:
+    state = json.loads((tmp / 'panel-state.json').read_text(encoding='utf-8'))
+except Exception:
+    state = {}
+pipes = state.get('pipelines') or {}
+for pid in ("voice-asr-prod", "voice-admin-prod"):
+    entry = pipes.get(pid) or {}
+    current = entry.get('current')
+    if '{{.Image}}' in fmt:
+        if current:
+            print(f"app-{pid} app-{pid}:{current}")
+    elif '{{.Status}}' in fmt:
         print(f"app-{pid} Up 2 minutes")
+    else:
+        print(f"app-{pid}")
 PY
     ;;
   *)

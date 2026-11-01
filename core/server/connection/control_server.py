@@ -129,9 +129,16 @@ async def _handle_command(raw, app: 'CapsWriterServer', websocket) -> Dict[str, 
         import logging
         if level not in ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'):
             return {'id': req_id, 'ok': False, 'error': 'invalid level'}
+        # A05：必须同步 logger 与全部 handler（含文件 handler），并核验
+        # 实际落盘——只改 Config/logger.setLevel 会出现「回执成功但文件
+        # 级别没变」。模型 worker 是独立进程，其日志级别在重启后同步。
+        from ...logger import Logger
+        if not Logger.set_level('server', level):
+            return {'id': req_id, 'ok': False, 'error': 'logger not initialized'}
         Config.log_level = level
-        logger.setLevel(getattr(logging, level))
-        logger.info(f"日志级别已调整为 {level}（控制通道）")
+        applied = [f'{type(h).__name__}->' + str(getattr(logging, level)) for h in logger.handlers]
+        logger.info(f"日志级别已调整为 {level}（控制通道；handler: {', '.join(applied)}；"
+                    f"模型 worker 子进程重启后同步）")
         return {'id': req_id, 'ok': True}
 
     if cmd == 'shutdown':

@@ -10,6 +10,8 @@ CapsWriter Offline 服务端主程序门面类 (Facade)
 import os
 import time
 import asyncio
+import json
+import sys
 from pathlib import Path
 from config_server import ServerConfig as Config, __version__
 from .state import ServerState, console
@@ -17,6 +19,7 @@ from core.tools.signal_handler import register_signal
 from core.tools.win_instance import InstanceMutex, write_pid_file, clear_pid_file
 from .worker.process_manager import ProcessManager
 from .connection.server_manager import SocketManager
+from .connection.port_conflict import reserve_listener, listeners, stop_listeners
 from .ui.tray_manager import TrayManager
 from . import logger
 
@@ -47,6 +50,7 @@ class CapsWriterServer:
         self.is_alive = False
         self.started_at = None
         self._instance_mutex = None
+        self.listener = None
 
 
     def _print_banner(self):
@@ -73,6 +77,9 @@ class CapsWriterServer:
 
         # 1. 关闭 WebSocket 服务（立即释放端口）
         self.socket_manager.stop()
+        if self.listener is not None:
+            self.listener.close()
+            self.listener = None
 
         # 2. 终止识别子进程
         self.process_manager.stop()
@@ -113,6 +120,38 @@ class CapsWriterServer:
             console.print('[red]检测到已有服务端实例正在运行，请勿重复启动。')
             return
         self._instance_mutex = mutex
+        try:
+            try:
+                self.listener = reserve_listener(Config.addr, Config.port)
+            except OSError as exc:
+                if exc.errno not in (98, 10048):
+                    raise
+                mode = os.environ.get('CAPSWRITER_PORT_CONFLICT', '')
+                if not mode and sys.stdin is not None and sys.stdin.isatty():
+                    print(f'端口 {Config.port} 已占用：1 自动换端口；2 关闭占用进程并使用原端口；其他 退出')
+                    mode = {'1': 'auto', '2': 'stop'}.get(input('选择：').strip(), '')
+                recorded = os.environ.get('CAPSWRITER_PORT_OWNERS')
+                if recorded:
+                    expected = {int(pid): tuple(value) for pid, value in json.loads(recorded).items()}
+                    if not expected or expected != listeners(Config.port, Config.addr):
+                        raise RuntimeError('端口占用者已变化，请重新选择')
+                if mode == 'auto':
+                    self.listener = reserve_listener(Config.addr, 0)
+                    Config.port = str(self.listener.getsockname()[1])
+                elif mode == 'stop':
+                    owners = listeners(Config.port, Config.addr)
+                    for pid, (_, exe) in owners.items():
+                        print(f'关闭端口占用进程：PID {pid} {exe}')
+                    stop_listeners(Config.port, Config.addr, owners)
+                    self.listener = reserve_listener(Config.addr, Config.port)
+                else:
+                    raise RuntimeError(f'端口 {Config.port} 已占用，未选择处理方式') from exc
+        except Exception as exc:
+            logger.error(f'无法启动服务：{exc}')
+            mutex.release()
+            self._instance_mutex = None
+            self.is_alive = False
+            return
         self.started_at = time.time()
         try:
             write_pid_file(self.base_dir / 'logs' / 'server.pid')

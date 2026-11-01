@@ -29,19 +29,23 @@ SETTINGS_SCHEMA: Dict[str, Dict[str, Any]] = {
         'label': '日志级别',
         'type': 'enum',
         'choices': ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-        'restart': False,
+        'restart': False,  # 识别进程在线时经控制通道即时应用（主进程；worker 重启后同步）
+        'help': '识别进程在线时即时生效（主进程与日志文件）；模型 worker 子进程重启后同步。',
     },
     'aligner_idle_timeout': {
         'label': '对齐引擎空闲释放（秒）',
         'type': 'int',
         'min': 0,
         'max': 3600,
-        'restart': False,
+        # R12：该值在模型加载时读取（ManagedAlignerProxy 构造参数），管理进程
+        # 写盘不会改变运行中的 ASR——必须如实标注需要重启，不能标「立即生效」
+        'restart': True,
     },
     'gpu_boost_enabled': {
         'label': 'GPU 预加速',
         'type': 'bool',
-        'restart': False,
+        # R12：识别进程在导入时读取该值；没有运行态下发的通道，改后需重启
+        'restart': True,
     },
 }
 

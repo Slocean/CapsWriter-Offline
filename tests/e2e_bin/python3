@@ -1,3 +1,7 @@
 #!/usr/bin/env bash
-# e2e 夹具：python3 → 转发到当前测试解释器
-exec "@PYTHON@" "$@"
+# e2e 夹具：python3 → 转发到当前测试解释器（Git Bash 可能没有 python3）。
+# 经 _py_lf.py 启动器：stdout/stderr 统一 LF（Windows Python 默认 CRLF 会
+# 破坏 bash 比较）。@PYTHON@ / @PYLF@ 由测试进程在复制夹具时烘焙为
+# Windows 绝对路径——MSYS2_ARG_CONV_EXCL='*' 禁用了参数转换，POSIX 路径
+# 直接传给 python.exe 会打不开，必须在 bash 之外就写好。
+exec "@PYTHON@" "@PYLF@" "$@"

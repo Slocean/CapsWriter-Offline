@@ -233,6 +233,68 @@ class WebappAPITests(_AdminServerBase):
         status, _, _ = self._req('GET', '/api/v1/status', headers=self._h())
         self.assertEqual(status, 401)
 
+    # ---------- R12/R13/R03：独立验收反例 ----------
+
+    def test_r13_bootstrap_returns_csrf_for_existing_session(self):
+        """R13：password 模式刷新页面（bootstrap）必须带回会话 CSRF"""
+        status, data, _ = self._req('GET', '/api/v1/bootstrap',
+                                    headers={'Cookie': self._h()['Cookie']})
+        self.assertEqual(status, 200)
+        self.assertTrue(data['authenticated'])
+        self.assertEqual(data['csrf'], self.csrf)
+        # 用 bootstrap 拿到的 CSRF 发写请求（刷新后场景）必须成功
+        status, _, _ = self._req('PUT', '/api/v1/settings', {'log_level': 'WARNING'},
+                                 {'Cookie': self._h()['Cookie'], 'X-CSRF-Token': data['csrf']})
+        self.assertEqual(status, 200)
+
+    def test_r12_restart_flags_are_honest(self):
+        """R12：无法运行态应用的设置必须如实列入 restart_required"""
+        status, data, _ = self._req('PUT', '/api/v1/settings',
+                                    {'gpu_boost_enabled': True, 'aligner_idle_timeout': 30},
+                                    self._h())
+        self.assertEqual(status, 200)
+        self.assertEqual(sorted(data['restart_required']),
+                         ['aligner_idle_timeout', 'gpu_boost_enabled'])
+
+    def test_r12_log_level_not_applied_marks_restart_required(self):
+        """R12：控制通道不可用（ASR 离线）时 log_level 不得谎报已生效"""
+        status, data, _ = self._req('PUT', '/api/v1/settings', {'log_level': 'WARNING'},
+                                    self._h())
+        self.assertEqual(status, 200)
+        self.assertIn('log_level', data['restart_required'])
+
+    def test_r12_log_level_applied_at_runtime(self):
+        """R12/A05：ASR 在线且控制通道确认时即时应用，并如实说明生效范围"""
+        from unittest import mock
+        with mock.patch.object(self.app.asr, 'apply_log_level', return_value=(True, '')):
+            status, data, _ = self._req('PUT', '/api/v1/settings', {'log_level': 'ERROR'},
+                                        self._h())
+        self.assertEqual(status, 200)
+        self.assertEqual(data['restart_required'], [])
+        self.assertIn('主进程', data.get('notice', ''))
+        self.assertIn('worker', data.get('notice', ''))
+
+    def test_r03_start_rejected_when_launch_invalid(self):
+        """R03：启动配置无效时服务端拒绝 start（403），不是前端-only 防护"""
+        from unittest import mock
+        from admin.config_admin import AdminConfig as _C
+        saved = (_C.asr_work_dir, _C.asr_launch_cmd, _C.asr_port,
+                 _C.asr_pid_file, _C.asr_control_token_path)
+        import socket as _s
+        sock = _s.socket(); sock.bind(('127.0.0.1', 0)); free = sock.getsockname()[1]; sock.close()
+        try:
+            _C.asr_work_dir = pathlib.Path('Z:/nonexistent-asr-dir')
+            _C.asr_launch_cmd = ['Z:/nonexistent/start_server.exe']
+            _C.asr_port = free
+            _C.asr_pid_file = pathlib.Path('Z:/nonexistent/server.pid')
+            _C.asr_control_token_path = pathlib.Path('Z:/nonexistent/t.token')
+            with mock.patch.object(self.app.asr.control, 'status_sync', return_value=None):
+                status, data, _ = self._req('POST', '/api/v1/actions/start', {}, self._h())
+            self.assertEqual(status, 403)
+        finally:
+            (_C.asr_work_dir, _C.asr_launch_cmd, _C.asr_port,
+             _C.asr_pid_file, _C.asr_control_token_path) = saved
+
 
 class GatewayModeTests(_AdminServerBase):
     """gateway 认证模式：信任部署面板登录网关注入的用户请求头"""

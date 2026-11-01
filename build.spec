@@ -59,6 +59,7 @@ hiddenimports += [
     'websockets',
     'websockets.client',
     'websockets.server',
+    'psutil',
     'rich',
     'rich.console',
     'rich.markdown',
@@ -159,9 +160,52 @@ a_2.binaries = filtered_binaries
 
 
 # 排除不要打包的模块（这些将作为源文件复制）
-private_module = ['core', 'config_client', 'config_server', 'LLM', ]
+# admin 同策略外置：admin.pyc 若进 internal 会抢先 import，使
+# config_admin.REPO_DIR 错指 _internal（admin 必须以真实源文件随包分发）
+private_module = ['core', 'config_client', 'config_server', 'LLM', 'admin']
 
-for which in (a_1, a_2):
+# 管理端第三个 Analysis：入口 start_admin.py（薄包装，admin 以外置源码运行，
+# 不加载模型；管理端不需要重型依赖，excludes 里排除）
+a_3 = Analysis(
+    ['start_admin.py'],
+    pathex=[],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=['build_hook.py'],
+    excludes=['IPython',
+              'PySide6', 'PySide2', 'PyQt5',
+              'matplotlib', 'wx',
+              'funasr', 'pydantic', 'torch',
+              'numpy', 'sounddevice', 'pypinyin', 'keyboard', 'pyclip',
+              'sherpa_onnx', 'srt', 'typer',
+              ],
+    noarchive=True,
+)
+
+# 管理端过滤从二进制分析收集的重型/环境 DLL（internal 由三个 EXE 共享）
+filtered_binaries = []
+for name, src, type in a_3.binaries:
+    src_lower = src.lower() if isinstance(src, str) else ''
+    is_system_cuda_dll = (
+        '\\nvidia gpu computing toolkit\\cuda\\' in src_lower or
+        '\\nvidia\\cudnn\\' in src_lower or
+        ('\\cuda\\v' in src_lower and '\\bin\\' in src_lower)
+    )
+    is_unwanted_onnx_dll = (
+        'onnxruntime_providers_cuda.dll' in name.lower() or
+        'directml.dll' in name.lower()
+    )
+    if not is_system_cuda_dll and not is_unwanted_onnx_dll:
+        filtered_binaries.append((name, src, type))
+    else:
+        reason = "环境 CUDA DLL" if is_system_cuda_dll else "冗余 ONNX DLL"
+        print(f"[INFO] 排除 {reason}: {name} (从 {src} 收集)")
+a_3.binaries = filtered_binaries
+
+for which in (a_1, a_2, a_3):
     filtered = []
     for name, src, type in which.pure:
         if not any(name == m or name.startswith(m + '.') for m in private_module):
@@ -169,7 +213,7 @@ for which in (a_1, a_2):
     which.pure = filtered
 
 # noarchive 会将私有模块也编译成 .pyc 放进 datas，排除掉以保持源码运行
-for which in (a_1, a_2):
+for which in (a_1, a_2, a_3):
     filtered = []
     for name, src, type in which.datas:
         is_private = any(
@@ -183,6 +227,7 @@ for which in (a_1, a_2):
 
 pyz_1 = PYZ(a_1.pure)
 pyz_2 = PYZ(a_2.pure)
+pyz_3 = PYZ(a_3.pure)
 
 
 exe_1 = EXE(
@@ -226,6 +271,27 @@ exe_2 = EXE(
     contents_directory='internal',
 )
 
+exe_3 = EXE(
+    pyz_3,
+    a_3.scripts,
+    [],
+    exclude_binaries=True,
+    name='start_admin',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=['assets\\\\icon.ico'],
+    # 所有第三方依赖放入 internal 目录（与 exe_1/exe_2 共享同一 internal）
+    contents_directory='internal',
+)
+
 coll = COLLECT(
     exe_1,
     a_1.binaries,
@@ -234,6 +300,10 @@ coll = COLLECT(
     exe_2,
     a_2.binaries,
     a_2.datas,
+
+    exe_3,
+    a_3.binaries,
+    a_3.datas,
 
     strip=False,
     upx=True,
@@ -248,12 +318,25 @@ my_files = [
     'config_server.py',
     'core_server.py',
     'core_client.py',
+    'start_admin.py',
     'hot.txt',
     'hot-server.txt',
     'hot-rule.txt',
     'readme.md',
     'LICENSE'
 ]
+
+# admin 以真实源码外置随包分发（EXE 只提供解释器与依赖）。
+# 排除：__pycache__、admin/data（密码/审计/运行态，交付包不得携带）、日志。
+admin_exclude_dirs = {'__pycache__', 'data'}
+admin_exclude_files = {'.log', '.pyc'}
+for dirpath, dirnames, filenames in walk('admin'):
+    dirnames[:] = [d for d in dirnames if d not in admin_exclude_dirs]
+    for filename in filenames:
+        if any(filename.endswith(s) for s in admin_exclude_files):
+            continue
+        my_files.append(join(dirpath, filename))
+
 my_folders = []     # 这里是要复制的文件夹
 dest_root = join('dist', basename(coll.name))
 
